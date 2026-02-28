@@ -167,6 +167,7 @@ KNOWN_DOMAINS = {
     'Lehigh': 'lehighsports.com',
     'American': 'aueagles.com',
     'Loyola Maryland': 'loyolagreyhounds.com',
+    'Loyola (Md.)': 'loyolagreyhounds.com',
     # === A-10 ===
     'Georgetown': 'guhoyas.com',
     'Villanova': 'villanova.com',

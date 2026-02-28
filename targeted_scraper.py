@@ -120,6 +120,36 @@ SCHOOL_ALIASES = {
     'gt': 'Georgia Tech',
     'nc state': 'NC State',
     'ncsu': 'NC State',
+    # Hy-Tek parenthetical abbreviations
+    'loyola md': 'Loyola Maryland',
+    'loyola md.': 'Loyola Maryland',
+    'loyola (md.)': 'Loyola Maryland',
+    'loyola (md)': 'Loyola Maryland',
+    'miami fl': 'Miami',
+    'miami (fl)': 'Miami',
+    'miami (fl.)': 'Miami',
+    'miami fl.': 'Miami',
+    'miami oh': 'Miami (OH)',
+    'miami (oh)': 'Miami (OH)',
+    'st johns': "St. John's",
+    'st. johns': "St. John's",
+    'saint johns': "St. John's",
+    'st josephs': "Saint Joseph's",
+    'st. josephs': "Saint Joseph's",
+    'saint josephs': "Saint Joseph's",
+    'st francis pa': 'St. Francis (PA)',
+    'st. francis (pa)': 'St. Francis (PA)',
+    'mount st marys': "Mount St. Mary's",
+    'mt st marys': "Mount St. Mary's",
+    'mount st. marys': "Mount St. Mary's",
+    'mount st. mary\'s': "Mount St. Mary's",
+    'trinity conn': 'Trinity (Conn.)',
+    'trinity (conn.)': 'Trinity (Conn.)',
+    'app state': 'Appalachian State',
+    'appalachian st': 'Appalachian State',
+    'penn': 'Penn',
+    'u penn': 'Penn',
+    'upenn': 'Penn',
 }
 
 
@@ -644,6 +674,7 @@ def try_bio_page_extraction(url, target_names, output_dir, school_name, html_con
     logging.info(f"Matched {len(matched_bio_links)} athletes, visiting bio pages for headshots")
     
     matched = []
+    seen_image_urls = set()  # Track unique image URLs to detect default/placeholder images
     
     session = requests.Session()
     session.headers.update({
@@ -712,6 +743,13 @@ def try_bio_page_extraction(url, target_names, output_dir, school_name, html_con
             else:
                 img_url = f"{img_url}?height=1000&quality=90"
             
+            # Check for duplicate/default images (same URL used for multiple athletes)
+            img_base_url = img_url.split('?')[0]  # Compare without query params
+            if img_base_url in seen_image_urls:
+                logging.warning(f"Skipping duplicate/default image for {roster_name}: {img_base_url[:80]}")
+                continue
+            seen_image_urls.add(img_base_url)
+            
             logging.info(f"Downloading headshot for {roster_name}: {img_url[:120]}")
             img_resp = session.get(img_url, timeout=10)
             if img_resp.status_code != 200:
@@ -740,11 +778,13 @@ def try_bio_page_extraction(url, target_names, output_dir, school_name, html_con
                 logging.warning(f"Background removal failed for {roster_name}: {e}")
                 pil_img = pil_img.convert('RGBA')
             
-            max_height = 400
+            # Keep images at high resolution for video board quality
+            # Only resize if extremely large (> 2000px) to avoid memory issues
+            max_height = 2000
             if pil_img.height > max_height:
                 ratio = max_height / pil_img.height
                 new_width = int(pil_img.width * ratio)
-                logging.info(f"Resized from {pil_img.width}x{pil_img.height} to {new_width}x{max_height} for efficiency")
+                logging.info(f"Resized from {pil_img.width}x{pil_img.height} to {new_width}x{max_height} (capping extremely large image)")
                 pil_img = pil_img.resize((new_width, max_height), Image.LANCZOS)
             
             os.makedirs(output_dir, exist_ok=True)
@@ -863,6 +903,15 @@ def scrape_roster_for_athletes(url, target_names, output_dir, school_name):
     
     logging.info(f"Filtered to {len(athletes)} matching athletes")
     
+    # If no athletes matched via roster extraction, fall back to bio-page extraction
+    if len(athletes) == 0:
+        logging.info(f"No athletes matched from roster extraction, trying bio-page extraction for {school_name}")
+        matched, unmatched = try_bio_page_extraction(url, target_names, output_dir, school_name, html_content)
+        if matched:
+            return matched, unmatched
+        logging.warning(f"Bio-page extraction also found no matches for {school_name}")
+        return [], list(target_names)
+    
     matched = []
     downloaded = 0
     
@@ -927,6 +976,13 @@ def scrape_roster_for_athletes(url, target_names, output_dir, school_name):
                 break
         if not found:
             unmatched.append(target)
+    
+    # If downloads failed for all matched athletes, try bio-page extraction
+    if downloaded == 0 and len(athletes) > 0:
+        logging.info(f"All {len(athletes)} image downloads failed, trying bio-page extraction for {school_name}")
+        bio_matched, bio_unmatched = try_bio_page_extraction(url, target_names, output_dir, school_name, html_content)
+        if bio_matched:
+            return bio_matched, bio_unmatched
     
     logging.info(f"Results for {school_name}: {downloaded} downloaded, {len(unmatched)} not found")
     
