@@ -521,11 +521,20 @@ def targeted_upload():
         return jsonify({'error': 'File must be a CSV'}), 400
     
     sport = request.form.get('sport', 'tf')
+    if sport not in ('tf', 'xc'):
+        sport = 'tf'
     
     try:
-        csv_content = file.read().decode('utf-8')
+        csv_content = file.read().decode('utf-8', errors='replace')
         
-        from targeted_scraper import parse_meet_csv
+        if not csv_content.strip():
+            return jsonify({'error': 'CSV file is empty'}), 400
+        
+        from targeted_scraper import parse_meet_csv, reset_targeted_progress
+        
+        # Reset progress before starting new scrape
+        reset_targeted_progress()
+        
         athletes_by_school, all_athletes = parse_meet_csv(csv_content)
         
         if not athletes_by_school:
@@ -545,8 +554,10 @@ def targeted_upload():
             'schools': list(athletes_by_school.keys())
         })
         
+    except UnicodeDecodeError:
+        return jsonify({'error': 'Could not read CSV file. Make sure it is UTF-8 encoded.'}), 400
     except Exception as e:
-        logger.error(f"Error processing targeted upload: {e}")
+        logger.error(f"Error processing targeted upload: {e}", exc_info=True)
         return jsonify({'error': str(e)}), 500
 
 
@@ -554,6 +565,18 @@ def targeted_upload():
 def targeted_status():
     from targeted_scraper import targeted_progress
     return jsonify(targeted_progress)
+
+
+@app.route('/targeted-reset', methods=['POST'])
+def targeted_reset():
+    """Reset targeted scrape progress for a new run."""
+    try:
+        from targeted_scraper import reset_targeted_progress
+        reset_targeted_progress()
+        return jsonify({'success': True, 'message': 'Progress reset'})
+    except Exception as e:
+        logger.error(f"Error resetting targeted progress: {e}")
+        return jsonify({'error': str(e)}), 500
 
 
 @app.route('/targeted-download')

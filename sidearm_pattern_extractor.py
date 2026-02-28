@@ -459,13 +459,16 @@ class SideArmExtractor:
                     # Use the AI model's output directly without modification for speed and quality
                     # Skipping quality checks for faster processing - u2net_human_seg is reliable
                     
-                    # Resize image to max 400px height while maintaining aspect ratio for efficiency
+                    # Keep images at high resolution for video board quality output
+                    # Only resize if image is extremely large (> 2000px height) to save space
                     width, height = output_img.size
-                    if height > 400:
-                        ratio = 400 / height
+                    if height > 2000:
+                        ratio = 2000 / height
                         new_width = int(width * ratio)
-                        output_img = output_img.resize((new_width, 400), Image.Resampling.LANCZOS)
-                        logging.info(f"Resized from {width}x{height} to {new_width}x400 for efficiency")
+                        output_img = output_img.resize((new_width, 2000), Image.Resampling.LANCZOS)
+                        logging.info(f"Resized from {width}x{height} to {new_width}x2000 (capped for storage)")
+                    elif height < 400:
+                        logging.info(f"Image is small ({width}x{height}) - keeping original resolution")
                     
                     # Save as PNG with transparency
                     file_path = os.path.join(self.output_dir, f"{safe_name}.png")

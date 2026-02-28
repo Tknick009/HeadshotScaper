@@ -72,13 +72,23 @@ def setup_headless_driver():
     try:
         # Try multiple ChromeDriver paths (handle different environments)
         try:
-            # This path works in Replit specifically
-            driver_path = "/nix/store/7007mjawxg2sy7cbk34fbxc8b5kzf8c0-chromedriver-113.0.5672.63/bin/chromedriver"
-            service = Service(executable_path=driver_path)
+            # Try webdriver-manager for automatic ChromeDriver management
+            from webdriver_manager.chrome import ChromeDriverManager
+            service = Service(ChromeDriverManager().install())
             driver = webdriver.Chrome(service=service, options=options)
-        except:
-            # Try with default ChromeDriver detection
-            driver = webdriver.Chrome(options=options)
+        except Exception:
+            try:
+                # Fallback: try system default ChromeDriver
+                driver = webdriver.Chrome(options=options)
+            except Exception:
+                # Last resort: try common paths
+                for path in ['/usr/bin/chromedriver', '/usr/local/bin/chromedriver']:
+                    if os.path.exists(path):
+                        service = Service(executable_path=path)
+                        driver = webdriver.Chrome(service=service, options=options)
+                        break
+                else:
+                    raise RuntimeError('Could not find ChromeDriver. Install with: pip install webdriver-manager')
             
         # Configure timeouts more aggressively
         driver.set_page_load_timeout(30)  # 30 second timeout for page load

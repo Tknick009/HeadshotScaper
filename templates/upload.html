@@ -1,0 +1,715 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Athlete Headshot Scraper</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0a0a0a;
+            color: #e0e0e0;
+            min-height: 100vh;
+        }
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 2rem 1.5rem;
+        }
+        header {
+            text-align: center;
+            margin-bottom: 2rem;
+            padding-bottom: 1.5rem;
+            border-bottom: 1px solid #222;
+        }
+        header h1 {
+            font-size: 1.8rem;
+            font-weight: 700;
+            color: #fff;
+            margin-bottom: 0.3rem;
+        }
+        header p {
+            color: #888;
+            font-size: 0.95rem;
+        }
+
+        /* Tabs */
+        .tabs {
+            display: flex;
+            gap: 0;
+            margin-bottom: 1.5rem;
+            border-bottom: 2px solid #222;
+        }
+        .tab {
+            padding: 0.75rem 1.5rem;
+            cursor: pointer;
+            color: #888;
+            font-weight: 500;
+            border-bottom: 2px solid transparent;
+            margin-bottom: -2px;
+            transition: all 0.2s;
+        }
+        .tab:hover { color: #ccc; }
+        .tab.active {
+            color: #4fc3f7;
+            border-bottom-color: #4fc3f7;
+        }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+
+        /* Cards */
+        .card {
+            background: #141414;
+            border: 1px solid #222;
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+        .card h2 {
+            font-size: 1.1rem;
+            margin-bottom: 0.5rem;
+            color: #fff;
+        }
+        .card p.desc {
+            color: #888;
+            font-size: 0.85rem;
+            margin-bottom: 1rem;
+            line-height: 1.5;
+        }
+
+        /* Form elements */
+        .upload-zone {
+            border: 2px dashed #333;
+            border-radius: 8px;
+            padding: 2rem;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.2s;
+            margin-bottom: 1rem;
+        }
+        .upload-zone:hover, .upload-zone.dragover {
+            border-color: #4fc3f7;
+            background: rgba(79, 195, 247, 0.05);
+        }
+        .upload-zone .icon { font-size: 2rem; margin-bottom: 0.5rem; }
+        .upload-zone .label { color: #888; font-size: 0.9rem; }
+        .upload-zone .filename {
+            color: #4fc3f7;
+            font-weight: 600;
+            margin-top: 0.3rem;
+        }
+
+        .form-row {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 1rem;
+            align-items: end;
+        }
+        .form-group {
+            flex: 1;
+        }
+        .form-group label {
+            display: block;
+            font-size: 0.8rem;
+            color: #888;
+            margin-bottom: 0.3rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        select, input[type="text"], textarea {
+            width: 100%;
+            padding: 0.6rem 0.8rem;
+            background: #1a1a1a;
+            border: 1px solid #333;
+            border-radius: 6px;
+            color: #e0e0e0;
+            font-size: 0.9rem;
+        }
+        select:focus, input:focus, textarea:focus {
+            outline: none;
+            border-color: #4fc3f7;
+        }
+        textarea {
+            resize: vertical;
+            min-height: 80px;
+            font-family: inherit;
+        }
+
+        .btn {
+            padding: 0.7rem 1.5rem;
+            border: none;
+            border-radius: 6px;
+            font-size: 0.9rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .btn-primary {
+            background: #4fc3f7;
+            color: #000;
+        }
+        .btn-primary:hover { background: #29b6f6; }
+        .btn-primary:disabled {
+            background: #333;
+            color: #666;
+            cursor: not-allowed;
+        }
+        .btn-secondary {
+            background: #222;
+            color: #e0e0e0;
+        }
+        .btn-secondary:hover { background: #333; }
+        .btn-success {
+            background: #66bb6a;
+            color: #000;
+        }
+        .btn-success:hover { background: #4caf50; }
+
+        /* Progress */
+        .progress-section { display: none; }
+        .progress-section.active { display: block; }
+        .progress-bar-container {
+            background: #1a1a1a;
+            border-radius: 8px;
+            height: 8px;
+            overflow: hidden;
+            margin-bottom: 1rem;
+        }
+        .progress-bar {
+            height: 100%;
+            background: linear-gradient(90deg, #4fc3f7, #29b6f6);
+            border-radius: 8px;
+            transition: width 0.5s ease;
+            width: 0%;
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+            gap: 0.75rem;
+            margin-bottom: 1rem;
+        }
+        .stat-card {
+            background: #1a1a1a;
+            border-radius: 8px;
+            padding: 0.75rem;
+            text-align: center;
+        }
+        .stat-card .number {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: #fff;
+        }
+        .stat-card .label {
+            font-size: 0.7rem;
+            color: #888;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        /* School list */
+        .school-list {
+            max-height: 400px;
+            overflow-y: auto;
+            margin-top: 1rem;
+        }
+        .school-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.6rem 0.8rem;
+            border-bottom: 1px solid #1a1a1a;
+            font-size: 0.85rem;
+        }
+        .school-item:last-child { border-bottom: none; }
+        .school-name {
+            flex: 1;
+            color: #e0e0e0;
+        }
+        .school-db-match {
+            color: #888;
+            font-size: 0.75rem;
+            margin-left: 0.5rem;
+        }
+        .school-status {
+            padding: 0.2rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+        .status-pending { background: #333; color: #888; }
+        .status-processing { background: #1a237e; color: #90caf9; }
+        .status-done { background: #1b5e20; color: #a5d6a7; }
+        .status-no_url { background: #4a1c1c; color: #ef9a9a; }
+        .status-error { background: #4a1c1c; color: #ef9a9a; }
+        .school-count {
+            color: #888;
+            font-size: 0.8rem;
+            margin-left: 0.75rem;
+        }
+
+        /* Action buttons */
+        .action-buttons {
+            display: flex;
+            gap: 0.75rem;
+            flex-wrap: wrap;
+            margin-top: 1rem;
+        }
+
+        /* URL-based upload */
+        .url-form textarea {
+            min-height: 120px;
+            font-family: monospace;
+            font-size: 0.85rem;
+        }
+
+        /* Help section */
+        .help-section {
+            background: #0d1b2a;
+            border: 1px solid #1b3a5c;
+            border-radius: 8px;
+            padding: 1rem 1.25rem;
+            margin-bottom: 1rem;
+        }
+        .help-section h3 {
+            font-size: 0.85rem;
+            color: #4fc3f7;
+            margin-bottom: 0.5rem;
+        }
+        .help-section code {
+            background: #1a1a1a;
+            padding: 0.15rem 0.4rem;
+            border-radius: 3px;
+            font-size: 0.8rem;
+            color: #4fc3f7;
+        }
+        .help-section ul {
+            list-style: none;
+            padding: 0;
+        }
+        .help-section li {
+            font-size: 0.8rem;
+            color: #aaa;
+            padding: 0.2rem 0;
+            line-height: 1.4;
+        }
+        .help-section li::before {
+            content: "\2022";
+            color: #4fc3f7;
+            margin-right: 0.5rem;
+        }
+
+        /* Log area */
+        .log-area {
+            background: #0a0a0a;
+            border: 1px solid #222;
+            border-radius: 6px;
+            padding: 0.75rem;
+            max-height: 200px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 0.75rem;
+            color: #666;
+            margin-top: 1rem;
+            display: none;
+        }
+        .log-area.active { display: block; }
+        .log-entry { padding: 0.1rem 0; }
+        .log-entry.error { color: #ef5350; }
+        .log-entry.success { color: #66bb6a; }
+        .log-entry.info { color: #4fc3f7; }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: #0a0a0a; }
+        ::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: #444; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Athlete Headshot Scraper</h1>
+            <p>Upload a meet CSV to automatically find and download athlete headshots</p>
+        </header>
+
+        <div class="tabs">
+            <div class="tab active" data-tab="targeted">Targeted (CSV Meet File)</div>
+            <div class="tab" data-tab="bulk">Bulk (URL List)</div>
+        </div>
+
+        <!-- TARGETED TAB -->
+        <div id="tab-targeted" class="tab-content active">
+            <div class="card" id="targeted-upload-card">
+                <h2>Upload Meet Entry CSV</h2>
+                <p class="desc">
+                    Upload a CSV from Hy-Tek Meet Manager or any CSV with School and Athlete Name columns.
+                    The app will automatically find each school's roster page, match athletes by name (with fuzzy matching for nicknames),
+                    download their headshots, remove backgrounds, and give you clean transparent PNGs.
+                </p>
+
+                <div class="help-section">
+                    <h3>Supported CSV Formats</h3>
+                    <ul>
+                        <li><strong>Hy-Tek Meet Manager</strong> &mdash; direct export from Meet Manager</li>
+                        <li><strong>Simple format</strong> &mdash; columns: <code>School, Athlete Name</code></li>
+                        <li><strong>Header format</strong> &mdash; columns with headers like <code>School</code>, <code>Name</code>, <code>First</code>, <code>Last</code></li>
+                    </ul>
+                </div>
+
+                <form id="targeted-form" enctype="multipart/form-data">
+                    <div class="upload-zone" id="targeted-drop-zone">
+                        <div class="icon">&#128196;</div>
+                        <div class="label">Drop your CSV file here or click to browse</div>
+                        <div class="filename" id="targeted-filename"></div>
+                        <input type="file" id="targeted-file" name="file" accept=".csv" style="display:none">
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Sport</label>
+                            <select name="sport" id="targeted-sport">
+                                <option value="tf">Track & Field</option>
+                                <option value="xc">Cross Country</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <button type="submit" class="btn btn-primary" id="targeted-submit" disabled>
+                        Start Targeted Scrape
+                    </button>
+                </form>
+            </div>
+
+            <!-- Targeted Progress -->
+            <div class="progress-section" id="targeted-progress-section">
+                <div class="card">
+                    <h2 id="targeted-progress-title">Processing...</h2>
+                    <div class="progress-bar-container">
+                        <div class="progress-bar" id="targeted-progress-bar"></div>
+                    </div>
+                    <div class="stats-grid">
+                        <div class="stat-card">
+                            <div class="number" id="stat-schools">0</div>
+                            <div class="label">Schools</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="number" id="stat-athletes">0</div>
+                            <div class="label">Athletes</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="number" id="stat-matched">0</div>
+                            <div class="label">Found</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="number" id="stat-unmatched">0</div>
+                            <div class="label">Not Found</div>
+                        </div>
+                    </div>
+
+                    <div id="targeted-current-school" style="color:#888;font-size:0.85rem;margin-bottom:0.75rem;"></div>
+
+                    <div class="school-list" id="targeted-school-list"></div>
+
+                    <div class="action-buttons" id="targeted-actions" style="display:none;">
+                        <a href="/targeted-download" class="btn btn-success">Download All Images (ZIP)</a>
+                        <a href="/targeted-unmatched" class="btn btn-secondary">Download Unmatched CSV</a>
+                        <button class="btn btn-secondary" onclick="resetTargeted()">Start New Scrape</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- BULK TAB -->
+        <div id="tab-bulk" class="tab-content">
+            <div class="card" id="bulk-upload-card">
+                <h2>Bulk Scrape by URL</h2>
+                <p class="desc">
+                    Upload a CSV of roster page URLs (one per line). Each URL will be scraped for all athlete headshots.
+                    Optionally add a team name in the second column.
+                </p>
+
+                <div class="help-section">
+                    <h3>CSV Format</h3>
+                    <ul>
+                        <li><code>https://goschool.com/sports/track/roster, School Name</code></li>
+                        <li>Team name column is optional &mdash; auto-detected from URL if omitted</li>
+                    </ul>
+                </div>
+
+                <form id="bulk-form" enctype="multipart/form-data">
+                    <div class="upload-zone" id="bulk-drop-zone">
+                        <div class="icon">&#128196;</div>
+                        <div class="label">Drop your URL CSV here or click to browse</div>
+                        <div class="filename" id="bulk-filename"></div>
+                        <input type="file" id="bulk-file" name="file" accept=".csv" style="display:none">
+                    </div>
+
+                    <div class="form-group" style="margin-bottom:1rem;">
+                        <label>School Filter (optional - one per line)</label>
+                        <textarea name="school_filter" id="bulk-school-filter"
+                            placeholder="Leave empty to scrape all URLs, or enter school names to filter..."></textarea>
+                    </div>
+
+                    <button type="submit" class="btn btn-primary" id="bulk-submit" disabled>
+                        Start Bulk Scrape
+                    </button>
+                </form>
+            </div>
+
+            <!-- Bulk Progress -->
+            <div class="progress-section" id="bulk-progress-section">
+                <div class="card">
+                    <h2 id="bulk-progress-title">Processing URLs...</h2>
+                    <div class="progress-bar-container">
+                        <div class="progress-bar" id="bulk-progress-bar"></div>
+                    </div>
+                    <div class="stats-grid">
+                        <div class="stat-card">
+                            <div class="number" id="bulk-stat-total">0</div>
+                            <div class="label">Total URLs</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="number" id="bulk-stat-success">0</div>
+                            <div class="label">Completed</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="number" id="bulk-stat-failed">0</div>
+                            <div class="label">Failed</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="number" id="bulk-stat-athletes">0</div>
+                            <div class="label">Athletes</div>
+                        </div>
+                    </div>
+
+                    <div class="action-buttons" id="bulk-actions" style="display:none;">
+                        <a href="/download" class="btn btn-success">Download All Images (ZIP)</a>
+                        <a href="/download_failed" class="btn btn-secondary">Download Failed URLs</a>
+                        <button class="btn btn-secondary" onclick="resetBulk()">Start New Scrape</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Tab switching
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+                tab.classList.add('active');
+                document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
+            });
+        });
+
+        // File upload zones
+        function setupDropZone(zoneId, inputId, filenameId, submitId) {
+            const zone = document.getElementById(zoneId);
+            const input = document.getElementById(inputId);
+            const filenameEl = document.getElementById(filenameId);
+            const submitBtn = document.getElementById(submitId);
+
+            zone.addEventListener('click', () => input.click());
+
+            zone.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                zone.classList.add('dragover');
+            });
+            zone.addEventListener('dragleave', () => zone.classList.remove('dragover'));
+            zone.addEventListener('drop', (e) => {
+                e.preventDefault();
+                zone.classList.remove('dragover');
+                if (e.dataTransfer.files.length) {
+                    input.files = e.dataTransfer.files;
+                    filenameEl.textContent = e.dataTransfer.files[0].name;
+                    submitBtn.disabled = false;
+                }
+            });
+            input.addEventListener('change', () => {
+                if (input.files.length) {
+                    filenameEl.textContent = input.files[0].name;
+                    submitBtn.disabled = false;
+                }
+            });
+        }
+
+        setupDropZone('targeted-drop-zone', 'targeted-file', 'targeted-filename', 'targeted-submit');
+        setupDropZone('bulk-drop-zone', 'bulk-file', 'bulk-filename', 'bulk-submit');
+
+        // Targeted form submission
+        document.getElementById('targeted-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const formData = new FormData();
+            formData.append('file', document.getElementById('targeted-file').files[0]);
+            formData.append('sport', document.getElementById('targeted-sport').value);
+
+            try {
+                const resp = await fetch('/targeted-upload', { method: 'POST', body: formData });
+                const data = await resp.json();
+
+                if (data.success) {
+                    document.getElementById('targeted-upload-card').style.display = 'none';
+                    document.getElementById('targeted-progress-section').classList.add('active');
+                    document.getElementById('stat-schools').textContent = data.school_count || 0;
+                    document.getElementById('stat-athletes').textContent = data.athlete_count || 0;
+                    pollTargetedStatus();
+                } else {
+                    alert(data.error || 'Upload failed');
+                }
+            } catch (err) {
+                alert('Error: ' + err.message);
+            }
+        });
+
+        // Bulk form submission
+        document.getElementById('bulk-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const formData = new FormData();
+            formData.append('file', document.getElementById('bulk-file').files[0]);
+            formData.append('school_filter', document.getElementById('bulk-school-filter').value);
+
+            try {
+                const resp = await fetch('/upload', { method: 'POST', body: formData });
+                const data = await resp.json();
+
+                if (data.success) {
+                    document.getElementById('bulk-upload-card').style.display = 'none';
+                    document.getElementById('bulk-progress-section').classList.add('active');
+                    document.getElementById('bulk-stat-total').textContent = data.url_count || 0;
+                    pollBulkStatus();
+                } else {
+                    alert(data.error || 'Upload failed');
+                }
+            } catch (err) {
+                alert('Error: ' + err.message);
+            }
+        });
+
+        // Poll targeted status
+        let targetedPollInterval;
+        function pollTargetedStatus() {
+            targetedPollInterval = setInterval(async () => {
+                try {
+                    const resp = await fetch('/targeted-status');
+                    const data = await resp.json();
+                    updateTargetedUI(data);
+                    if (data.completed) {
+                        clearInterval(targetedPollInterval);
+                    }
+                } catch (err) {
+                    console.error('Poll error:', err);
+                }
+            }, 2000);
+        }
+
+        function updateTargetedUI(data) {
+            const totalSchools = data.total_schools || 1;
+            const processed = data.processed_schools || 0;
+            const pct = Math.round((processed / totalSchools) * 100);
+
+            document.getElementById('targeted-progress-bar').style.width = pct + '%';
+            document.getElementById('stat-matched').textContent = data.matched_athletes || 0;
+            document.getElementById('stat-unmatched').textContent = (data.unmatched_athletes || []).length;
+
+            // Status title
+            if (data.completed) {
+                const matched = data.matched_athletes || 0;
+                const total = data.total_athletes || 0;
+                document.getElementById('targeted-progress-title').textContent =
+                    `Complete - ${matched}/${total} athletes found`;
+                document.getElementById('targeted-actions').style.display = 'flex';
+            } else if (data.current_school) {
+                document.getElementById('targeted-current-school').textContent =
+                    `Currently processing: ${data.current_school}`;
+            }
+
+            // School list
+            const schoolResults = data.school_results || {};
+            const listEl = document.getElementById('targeted-school-list');
+            listEl.innerHTML = '';
+
+            for (const [school, result] of Object.entries(schoolResults)) {
+                const item = document.createElement('div');
+                item.className = 'school-item';
+
+                let statusClass = 'status-' + (result.status || 'pending');
+                let statusText = result.status || 'pending';
+                if (statusText === 'done') statusText = 'done';
+                if (statusText === 'no_url') statusText = 'no roster';
+                if (statusText === 'processing') statusText = 'scraping...';
+
+                let dbMatch = '';
+                if (result.db_school && result.db_school !== school) {
+                    dbMatch = `<span class="school-db-match">(matched: ${result.db_school})</span>`;
+                }
+
+                item.innerHTML = `
+                    <span class="school-name">${school}${dbMatch}</span>
+                    <span class="school-count">${result.matched || 0}/${result.total || 0}</span>
+                    <span class="school-status ${statusClass}">${statusText}</span>
+                `;
+                listEl.appendChild(item);
+            }
+        }
+
+        // Poll bulk status
+        let bulkPollInterval;
+        function pollBulkStatus() {
+            bulkPollInterval = setInterval(async () => {
+                try {
+                    const resp = await fetch('/status');
+                    const data = await resp.json();
+                    updateBulkUI(data);
+                    if (data.completed) {
+                        clearInterval(bulkPollInterval);
+                    }
+                } catch (err) {
+                    console.error('Poll error:', err);
+                }
+            }, 2000);
+        }
+
+        function updateBulkUI(data) {
+            const stats = data.stats || {};
+            const total = stats.total || 1;
+            const done = (stats.success_count || 0) + (stats.failed_count || 0);
+            const pct = Math.round((done / total) * 100);
+
+            document.getElementById('bulk-progress-bar').style.width = pct + '%';
+            document.getElementById('bulk-stat-success').textContent = stats.success_count || 0;
+            document.getElementById('bulk-stat-failed').textContent = stats.failed_count || 0;
+            document.getElementById('bulk-stat-athletes').textContent = stats.total_athletes || 0;
+
+            if (data.completed) {
+                document.getElementById('bulk-progress-title').textContent =
+                    `Complete - ${stats.total_athletes || 0} athletes scraped`;
+                document.getElementById('bulk-actions').style.display = 'flex';
+            }
+        }
+
+        function resetTargeted() {
+            document.getElementById('targeted-upload-card').style.display = 'block';
+            document.getElementById('targeted-progress-section').classList.remove('active');
+            document.getElementById('targeted-form').reset();
+            document.getElementById('targeted-filename').textContent = '';
+            document.getElementById('targeted-submit').disabled = true;
+            document.getElementById('targeted-actions').style.display = 'none';
+            document.getElementById('targeted-school-list').innerHTML = '';
+        }
+
+        function resetBulk() {
+            document.getElementById('bulk-upload-card').style.display = 'block';
+            document.getElementById('bulk-progress-section').classList.remove('active');
+            document.getElementById('bulk-form').reset();
+            document.getElementById('bulk-filename').textContent = '';
+            document.getElementById('bulk-submit').disabled = true;
+            document.getElementById('bulk-actions').style.display = 'none';
+        }
+    </script>
+</body>
+</html>
