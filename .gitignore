@@ -1,0 +1,9 @@
+athletes/
+ncaa_logos/
+__pycache__/
+*.pyc
+*.pyo
+.env
+*.zip
+progress_*.json
+chromedriver*
