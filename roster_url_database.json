@@ -130,7 +130,7 @@
   },
   "Alma": {
     "tf": {
-      "men": "https://almascots.com/sports/womens-track-and-field/roster",
+      "men": "https://almascots.com/sports/mens-track-and-field/roster",
       "women": "https://almascots.com/sports/womens-track-and-field/roster"
     }
   },
@@ -148,7 +148,7 @@
   "American Int'l": {
     "tf": {
       "men": "https://aicyellowjackets.com/sports/mens-track-and-field/roster",
-      "women": "https://aicyellowjackets.com/sports/mens-track-and-field/roster"
+      "women": "https://aicyellowjackets.com/sports/womens-track-and-field/roster"
     }
   },
   "Amherst": {
@@ -222,7 +222,7 @@
   },
   "Arkansas Baptist": {
     "tf": {
-      "combined": "https://abcbuffaloes.com/sports/track-and-field"
+      "combined": "https://abcbuffaloes.com/sports/track-and-field/roster"
     }
   },
   "Arkansas State": {
@@ -1260,8 +1260,8 @@
   },
   "Concord": {
     "tf": {
-      "men": "https://cumountainlions.com/sports/mens-track-and-field",
-      "women": "https://csucougars.com/sports/womens-track-and-field/roster"
+      "men": "https://cumountainlions.com/sports/mens-track-and-field/roster",
+      "women": "https://cumountainlions.com/sports/womens-track-and-field/roster"
     }
   },
   "Concordia (Mich.)": {
@@ -1888,8 +1888,7 @@
   },
   "Fayetteville St.": {
     "tf": {
-      "men": "https://fsubroncos.com/sports/cross-country/roster",
-      "women": "https://fsubroncos.com/sports/track-and-field/roster"
+      "combined": "https://fsubroncos.com/sports/track-and-field/roster"
     }
   },
   "FDU": {
@@ -6416,7 +6415,7 @@
   "Virginia Union": {
     "tf": {
       "men": "https://vuusports.com/sports/mens-track-and-field/roster",
-      "women": "https://vuusports.com/sports/mens-track-and-field/roster"
+      "women": "https://vuusports.com/sports/womens-track-and-field/roster"
     }
   },
   "Virginia Wesleyan": {
