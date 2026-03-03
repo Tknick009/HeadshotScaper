@@ -698,15 +698,47 @@ def try_bio_page_extraction(url, target_names, output_dir, school_name, html_con
             bio_soup = BeautifulSoup(bio_resp.text, 'html.parser')
             
             headshot_img = None
-            for img in bio_soup.find_all('img'):
-                alt = (img.get('alt') or '').strip()
-                src = img.get('src') or ''
+            
+            # Priority 1: Look for image inside headshot-specific container
+            headshot_containers = bio_soup.select(
+                '.sidearm-roster-player-image img, '
+                '.sidearm-roster-player-header-details img, '
+                '[class*="headshot"] img, '
+                '[class*="player-image"] img:not([class*="action"]), '
+                '[class*="person__image"] img'
+            )
+            for img in headshot_containers:
+                src = img.get('src') or img.get('data-src') or ''
                 if not src:
                     continue
-                if alt and name_matches(alt, roster_name):
-                    headshot_img = img
-                    break
+                # Make sure this is NOT inside an action/cover photo container
+                parent_classes = ''
+                for parent in img.parents:
+                    parent_classes += ' '.join(parent.get('class', [])).lower() + ' '
+                if 'action-photo' in parent_classes or 'cover' in parent_classes:
+                    continue
+                headshot_img = img
+                logging.info(f"Found headshot in dedicated container for {roster_name}")
+                break
             
+            # Priority 2: Match by alt text containing athlete name
+            if not headshot_img:
+                for img in bio_soup.find_all('img'):
+                    alt = (img.get('alt') or '').strip()
+                    src = img.get('src') or ''
+                    if not src:
+                        continue
+                    if alt and name_matches(alt, roster_name):
+                        # Still skip if inside action-photo container
+                        parent_classes = ''
+                        for parent in img.parents:
+                            parent_classes += ' '.join(parent.get('class', [])).lower() + ' '
+                        if 'action-photo' in parent_classes or 'cover' in parent_classes:
+                            continue
+                        headshot_img = img
+                        break
+            
+            # Priority 3: Fallback - find first content image, but skip action/cover photos
             if not headshot_img:
                 imgs = bio_soup.find_all('img', src=lambda x: x and any(
                     ext in x.lower() for ext in ['.jpg', '.jpeg', '.png', '.webp']
@@ -718,6 +750,13 @@ def try_bio_page_extraction(url, target_names, output_dir, school_name, html_con
                         continue
                     cls_str = ' '.join(img.get('class', [])).lower()
                     if any(kw in cls_str for kw in ['logo', 'nav-logo', 'site-logo']):
+                        continue
+                    # Skip images inside action/cover photo containers
+                    parent_classes = ''
+                    for parent in img.parents:
+                        parent_classes += ' '.join(parent.get('class', [])).lower() + ' '
+                    if 'action-photo' in parent_classes or 'cover' in parent_classes:
+                        logging.info(f"Skipping action/cover photo for {roster_name}")
                         continue
                     headshot_img = img
                     break
