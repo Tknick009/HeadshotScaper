@@ -19,8 +19,8 @@ except ImportError:
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# Legacy path for pre-built database (optional, not required)
-ROSTER_DB_PATH = 'roster_urls/roster_url_database.json'
+# Path for pre-built roster URL database
+ROSTER_DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'roster_url_database.json')
 
 # Minimum image height for video board quality output
 MIN_OUTPUT_HEIGHT = 800
@@ -28,12 +28,17 @@ MIN_OUTPUT_HEIGHT = 800
 
 def load_roster_database():
     """Load roster database if it exists, otherwise return empty dict."""
+    logging.info(f"Looking for roster database at: {ROSTER_DB_PATH}")
     if os.path.exists(ROSTER_DB_PATH):
         try:
             with open(ROSTER_DB_PATH, 'r') as f:
-                return json.load(f)
+                db = json.load(f)
+            logging.info(f"Loaded roster database with {len(db)} schools")
+            return db
         except Exception as e:
             logging.warning(f"Could not load roster database: {e}")
+    else:
+        logging.warning(f"Roster database not found at {ROSTER_DB_PATH}")
     return {}
 
 
