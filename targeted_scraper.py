@@ -8,6 +8,7 @@ import gc
 from io import StringIO
 from typing import Dict, List, Optional, Tuple
 from difflib import SequenceMatcher
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Try to use rapidfuzz for better fuzzy matching performance
 try:
@@ -1054,19 +1055,40 @@ def run_targeted_scrape(csv_content, sport='tf', output_dir='athletes/targeted')
         logging.info(f"Parsed {len(all_athletes)} athletes from {len(athletes_by_school)} schools")
         
         db = load_roster_database()
-        targeted_progress['status'] = 'scraping'
+        targeted_progress['status'] = 'discovering'
         
-        school_db_map = {}
+        # Initialize all school results as pending
         for school, athletes in athletes_by_school.items():
-            urls, db_school = get_roster_urls_for_school(school, db, sport)
-            school_db_map[school] = (urls, db_school)
             targeted_progress['school_results'][school] = {
-                'status': 'pending',
+                'status': 'discovering',
                 'matched': 0,
                 'total': len(athletes),
                 'unmatched': [],
-                'db_school': db_school if db_school and db_school != school else None
+                'db_school': None
             }
+        
+        # Parallel URL discovery - much faster than sequential
+        school_db_map = {}
+        school_list = list(athletes_by_school.keys())
+        logging.info(f"Starting parallel URL discovery for {len(school_list)} schools...")
+        
+        def _discover_urls(school_name):
+            return school_name, get_roster_urls_for_school(school_name, db, sport)
+        
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            futures = {executor.submit(_discover_urls, school): school for school in school_list}
+            discovered = 0
+            for future in as_completed(futures):
+                school_name, (urls, db_school) = future.result()
+                school_db_map[school_name] = (urls, db_school)
+                discovered += 1
+                targeted_progress['school_results'][school_name]['db_school'] = db_school if db_school and db_school != school_name else None
+                targeted_progress['school_results'][school_name]['status'] = 'pending' if urls else 'no_url'
+                if discovered % 10 == 0:
+                    logging.info(f"URL discovery progress: {discovered}/{len(school_list)} schools")
+        
+        logging.info(f"URL discovery complete: {sum(1 for v in school_db_map.values() if v[0])}/{len(school_list)} schools have roster URLs")
+        targeted_progress['status'] = 'scraping'
         
         for school, athletes in athletes_by_school.items():
             targeted_progress['current_school'] = school

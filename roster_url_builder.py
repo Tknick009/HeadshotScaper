@@ -12,6 +12,10 @@ import os
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
+import threading
+
+# Thread lock for URL cache file access
+_cache_lock = threading.Lock()
 
 logger = logging.getLogger(__name__)
 
@@ -332,6 +336,110 @@ KNOWN_DOMAINS = {
     'Presbyterian': 'gobluehose.com',
     'Gardner-Webb': 'gwusports.com',
     'Charleston Southern': 'csusports.com',
+    # === DII - GNAC / RMAC / Lone Star / GLVC / GAC / MIAA / GLIAC / PSAC / SAC / CIAA / SIAC ===
+    'Adams State': 'adamsstategrizzlies.com',
+    'Alabama-Huntsville': 'uahchargers.com',
+    'Alaska Anchorage': 'goseawolves.com',
+    'Allen': 'allenuniversityathletics.com',
+    'Angelo State': 'angelosports.com',
+    'Ashland': 'goashlandeagles.com',
+    'Augustana (S.D.)': 'goaugie.com',
+    'Azusa Pacific': 'azusaathletics.com',
+    'Benedict': 'benedicttigers.com',
+    'Black Hills St.': 'bhsuyellowjackets.com',
+    'Black Hills State': 'bhsuyellowjackets.com',
+    'CSU Pueblo': 'gothunderwolves.com',
+    'Cal Poly Humboldt': 'gohumboldtjacks.com',
+    'Cal Poly Pomona': 'broncosports.com',
+    'California (Pa.)': 'calvulcans.com',
+    'Carson-Newman': 'cneagles.com',
+    'Catawba': 'catawbaathletics.com',
+    'Cedarville': 'cedarvilleathletics.com',
+    'Central Missouri': 'ucmathletics.com',
+    'Central Washington': 'wildcatsports.com',
+    'Chadron State': 'chadroneagles.com',
+    'Charleston (W.V.)': 'ucgoldeneagles.com',
+    'Claflin': 'claflinathletics.com',
+    'Colo. Christian': 'ccucougars.com',
+    'Colorado Christian': 'ccucougars.com',
+    'Colorado Mesa': 'cmumavericks.com',
+    'Colorado Mines': 'minesathletics.com',
+    'Colorado School of Mines': 'minesathletics.com',
+    'Concordia (Neb.)': 'cunebulldogs.com',
+    'Concordia-St. Paul': 'cubears.com',
+    'Dallas Baptist': 'dbupatriots.com',
+    'Doane': 'doanetigers.com',
+    'Drury': 'drurypanthers.com',
+    'Embry-Riddle': 'erauathletics.com',
+    'Emporia State': 'gohornetsonline.com',
+    'Ferris State': 'ferrisstatebulldogs.com',
+    'Findlay': 'findlayoilers.com',
+    'Florida Southern': 'fscmoccasins.com',
+    'Fort Hays State': 'fhsuathletics.com',
+    'Fort Valley State': 'fvstateathletics.com',
+    'Frostburg State': 'frostburgathletics.com',
+    'Grand Valley State': 'gvsulakers.com',
+    'Harding': 'hardingsports.com',
+    'Henderson State': 'hendersonreddies.com',
+    'Hillsdale': 'hillsdalechargers.com',
+    'Indiana (Pa.)': 'iupathletics.com',
+    'IUP': 'iupathletics.com',
+    'Johnson C. Smith': 'jcsugoldenbulls.com',
+    'Lee': 'leeflames.com',
+    'Lenoir-Rhyne': 'lrbears.com',
+    'Lewis': 'lewisflyers.com',
+    'Lincoln (Mo.)': 'lincolnbluetiger.com',
+    'Lindenwood': 'lindenwoodlions.com',
+    'Livingstone': 'livingstoneathletics.com',
+    'Lynn': 'lynnfightingknights.com',
+    'Malone': 'malonepioneers.com',
+    'McKendree': 'mckbearcats.com',
+    'Metro State': 'msudenver.com',
+    'Michigan Tech': 'michigantechhuskies.com',
+    'Minnesota Duluth': 'umdbulldogs.com',
+    'Minnesota State': 'msumavericks.com',
+    'Mississippi College': 'gochoctaws.com',
+    'Missouri Southern': 'mssolions.com',
+    'Missouri Western': 'gogriffons.com',
+    'Mount Olive': 'mountolivetrojans.com',
+    'NW Missouri State': 'nwbearcats.com',
+    'Northwest Missouri State': 'nwbearcats.com',
+    'Northwood': 'northwoodtimberwolves.com',
+    'Ouachita Baptist': 'obutigers.com',
+    'Pittsburg State': 'pittstategorillas.com',
+    'Point Loma': 'plnusealions.com',
+    'Queens (N.C.)': 'queensathletics.com',
+    'Saginaw Valley State': 'svsuathletics.com',
+    "Saint Augustine's": 'saufalcons.com',
+    'Saint Leo': 'saintleolions.com',
+    'Shaw': 'shawbears.com',
+    'Simon Fraser': 'sfuclan.com',
+    'Sioux Falls': 'usfcougars.com',
+    'Slippery Rock': 'rockpride.com',
+    'South Dakota': 'goyotes.com',
+    'South Dakota State': 'gojacks.com',
+    'Southern Arkansas': 'muleriderathletics.com',
+    'Southern Indiana': 'gousi.com',
+    'Southwest Baptist': 'sbubearcat.com',
+    'St. Cloud State': 'scsuhuskies.com',
+    'Stillman': 'stillmanathletics.com',
+    'Tiffin': 'gotiffindragons.com',
+    'Truman State': 'trumanbulldogs.com',
+    'Tuskegee': 'tuskegeeathletics.com',
+    'UC Colorado Springs': 'gomountainlions.com',
+    'UCCS': 'gomountainlions.com',
+    'Virginia State': 'vstrojans.com',
+    'Virginia Union': 'vuurams.com',
+    'Walsh': 'walshcavaliers.com',
+    'Washburn': 'wusports.com',
+    'Wayne State (Neb.)': 'wscwildcats.com',
+    'West Georgia': 'uwgathletics.com',
+    'West Texas A&M': 'gobuffsgo.com',
+    'Western Colorado': 'gomountaineers.com',
+    'Western New Mexico': 'wnmuathletics.com',
+    'Western Oregon': 'wouwolves.com',
+    'Wingate': 'wingatebulldogs.com',
+    'Winston-Salem State': 'wssrams.com',
 }
 
 # Common URL patterns for roster pages (ordered by likelihood)
@@ -395,23 +503,25 @@ SCHOOL_ROSTER_OVERRIDES = {
 
 
 def _load_url_cache():
-    """Load the URL cache from disk."""
-    try:
-        if os.path.exists(URL_CACHE_FILE):
-            with open(URL_CACHE_FILE, 'r') as f:
-                return json.load(f)
-    except Exception as e:
-        logger.warning(f"Could not load URL cache: {e}")
+    """Load the URL cache from disk (thread-safe)."""
+    with _cache_lock:
+        try:
+            if os.path.exists(URL_CACHE_FILE):
+                with open(URL_CACHE_FILE, 'r') as f:
+                    return json.load(f)
+        except Exception as e:
+            logger.warning(f"Could not load URL cache: {e}")
     return {}
 
 
 def _save_url_cache(cache):
-    """Save the URL cache to disk."""
-    try:
-        with open(URL_CACHE_FILE, 'w') as f:
-            json.dump(cache, f, indent=2)
-    except Exception as e:
-        logger.warning(f"Could not save URL cache: {e}")
+    """Save the URL cache to disk (thread-safe)."""
+    with _cache_lock:
+        try:
+            with open(URL_CACHE_FILE, 'w') as f:
+                json.dump(cache, f, indent=2)
+        except Exception as e:
+            logger.warning(f"Could not save URL cache: {e}")
 
 
 def get_tfrrs_schools(division='d1'):
@@ -480,7 +590,7 @@ def guess_domain(school_name):
     return guesses
 
 
-def check_url_exists(url, timeout=8):
+def check_url_exists(url, timeout=3):
     """Check if a URL exists and returns roster-like content."""
     try:
         response = requests.get(url, headers=HEADERS, timeout=timeout, allow_redirects=True)
@@ -504,11 +614,14 @@ def find_roster_url(school_name, sport='mxc'):
     3. Try standard SideArm URL patterns against known/guessed domains
     4. Cache any discovered URLs for future runs
     """
-    # 1. Check URL cache first
+    # 1. Check URL cache first (includes negative cache for schools with no URL)
     cache = _load_url_cache()
     cache_key = f"{school_name}|{sport}"
     if cache_key in cache:
         cached_url = cache[cache_key]
+        if cached_url is None:
+            logger.info(f"Skipping {school_name} ({sport}) - cached as no URL found")
+            return None
         logger.info(f"Using cached URL for {school_name} ({sport}): {cached_url}")
         return cached_url
     
@@ -593,6 +706,9 @@ def find_roster_url(school_name, sport='mxc'):
                 return url
     
     logger.warning(f"No roster URL found for {school_name} ({sport})")
+    # Cache the negative result so we don't re-check next time
+    cache[cache_key] = None
+    _save_url_cache(cache)
     return None
 
 
