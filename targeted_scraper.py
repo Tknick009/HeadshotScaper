@@ -443,6 +443,18 @@ NICKNAME_MAP = {
     'andy': 'andrew', 'andrew': 'andy',
     'drew': 'andrew',
     'charlie': 'charles', 'charles': 'charlie',
+    'charlotte': 'charlie',
+    'steph': 'stephanie', 'stephanie': 'steph',
+    'micky': 'mccartney',
+    'maddy': 'madeline',
+    'brianna': 'bri', 'bri': 'brianna',
+    'frankie': 'francesca', 'francesca': 'frankie',
+    'viv': 'vivian', 'vivian': 'viv',
+    'ellie': 'elizabeth',
+    'les': 'lesli', 'lesli': 'les',
+    'mckenzie': 'kenzie', 'kenzie': 'mckenzie',
+    'ayo': 'ayomide',
+    'gabe': 'gabriel', 'gabriel': 'gabe',
     'chuck': 'charles',
     'jack': 'john', 'john': 'jack',
     'johnny': 'john',
@@ -881,11 +893,20 @@ def scrape_roster_for_athletes(url, target_names, output_dir, school_name):
     prestosports_domains = [
         'goregispride.com', 'gosuffolkrams.com', 'wentworthathletics.com',
         'westfieldstateowls.com', 'aicyellowjackets.com', 'laserpride.lasell.edu',
-        'ecgulls.com', 'leeuflames.com'
+        'ecgulls.com', 'leeuflames.com',
+        'cneagles.com', 'udcfirebirds.com', 'svsucardinals.com',
+        'tusculumpioneers.com', 'olivetcomets.com', 'onutigers.com',
+        'bakerwildcats.com', 'gonorthwood.com', 'pioneersathletics.com',
+        'psblions.com', 'sagegators.com', 'stacathletics.com',
+        'tampaspartans.com', 'ttusports.com', 'twbulldogs.com',
     ]
     
     html_content = None
+    # Detect PrestoSports by domain list OR by URL pattern (year in path like /2025-26/)
     is_presto = any(pd in domain for pd in prestosports_domains)
+    if not is_presto and re.search(r'/\d{4}-\d{2}/', url):
+        is_presto = True
+        logging.info(f"Auto-detected PrestoSports URL pattern for {school_name}")
     
     if is_presto:
         logging.info(f"PrestoSports domain detected - using Selenium")
@@ -904,7 +925,7 @@ def scrape_roster_for_athletes(url, target_names, output_dir, school_name):
     extractor = SideArmExtractor(url, output_dir, html_content=html_content)
     all_athletes = extractor.extract_and_download_all()
     
-    real_count = len([a for a in (all_athletes or []) if a.get('name') and a.get('image_url') and 'dummy' not in a.get('image_url', '').lower()])
+    real_count = len([a for a in (all_athletes or []) if a.get('name') and (a.get('image') or a.get('image_url')) and 'dummy' not in (a.get('image') or a.get('image_url', '')).lower()])
     if real_count < 5:
         logging.info(f"Only {real_count} real athletes found, trying Selenium fallback...")
         if not is_presto and not html_content:

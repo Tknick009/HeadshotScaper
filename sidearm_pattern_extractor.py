@@ -213,6 +213,88 @@ class SideArmExtractor:
         
         return image_urls
         
+    def extract_from_json_ld(self, html):
+        """Extract athlete data from JSON-LD structured data (schema.org SportsTeam/ListItem/Person)."""
+        import json as json_module
+        athletes = []
+        
+        # Find all JSON-LD script blocks
+        soup = BeautifulSoup(html, 'html.parser')
+        ld_scripts = soup.find_all('script', type='application/ld+json')
+        
+        def extract_person(person_data):
+            """Extract name and image from a Person-type JSON-LD object."""
+            if not isinstance(person_data, dict):
+                return None
+            name = person_data.get('name', '')
+            if not name or not self.is_valid_athlete_name(name):
+                return None
+            
+            image_url = ''
+            img_data = person_data.get('image', {})
+            if isinstance(img_data, dict):
+                image_url = img_data.get('url', '')
+            elif isinstance(img_data, str):
+                image_url = img_data
+            
+            if name and image_url:
+                # Make absolute URL
+                if image_url.startswith('/'):
+                    image_url = self.base_url + image_url
+                return {
+                    'name': name,
+                    'image_url': image_url,
+                    'image': image_url,
+                }
+            return None
+        
+        for script in ld_scripts:
+            try:
+                if not script.string:
+                    continue
+                data = json_module.loads(script.string)
+                
+                # Handle both single objects and arrays
+                items = data if isinstance(data, list) else [data]
+                
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
+                    
+                    item_type = item.get('@type', '')
+                    
+                    # Format 1: SportsTeam with athlete/member list
+                    if item_type == 'SportsTeam':
+                        for key in ('athlete', 'member'):
+                            for person in item.get(key, []):
+                                result = extract_person(person)
+                                if result:
+                                    athletes.append(result)
+                    
+                    # Format 2: ListItem with item array of Person objects (SideArm/SFU format)
+                    elif item_type == 'ListItem' and 'item' in item:
+                        person_list = item['item']
+                        if isinstance(person_list, list):
+                            for person in person_list:
+                                result = extract_person(person)
+                                if result:
+                                    athletes.append(result)
+                        elif isinstance(person_list, dict):
+                            result = extract_person(person_list)
+                            if result:
+                                athletes.append(result)
+                    
+                    # Format 3: Direct Person object
+                    elif item_type == 'Person':
+                        result = extract_person(item)
+                        if result:
+                            athletes.append(result)
+                    
+            except (json_module.JSONDecodeError, TypeError, KeyError, ValueError):
+                continue
+        
+        return athletes
+    
     def extract_from_komodel_data(self, html):
         """Extract data from knockout.js data models commonly used by SideArm."""
         athletes = []
@@ -575,6 +657,11 @@ class SideArmExtractor:
         card_athletes = self.extract_from_person_cards(html)
         logging.info(f"Found {len(card_athletes)} athletes via person cards")
         all_athletes.extend(card_athletes)
+        
+        # Method 6: JSON-LD structured data (schema.org SportsTeam)
+        jsonld_athletes = self.extract_from_json_ld(html)
+        logging.info(f"Found {len(jsonld_athletes)} athletes via JSON-LD")
+        all_athletes.extend(jsonld_athletes)
         
         if not all_athletes:
             logging.error("Failed to find any athletes")
