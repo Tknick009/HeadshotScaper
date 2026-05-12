@@ -524,6 +524,8 @@ def targeted_upload():
     if sport not in ('tf', 'xc'):
         sport = 'tf'
     
+    full_roster = request.form.get('full_roster', 'false').lower() in ('true', '1', 'on', 'yes')
+    
     try:
         csv_content = file.read().decode('utf-8', errors='replace')
         
@@ -542,16 +544,18 @@ def targeted_upload():
         
         from targeted_scraper import run_targeted_scrape
         
-        thread = Thread(target=run_targeted_scrape, args=(csv_content, sport))
+        thread = Thread(target=run_targeted_scrape, args=(csv_content, sport, 'athletes/targeted', full_roster))
         thread.daemon = True
         thread.start()
         
+        mode_msg = "full rosters" if full_roster else f"{len(all_athletes)} athletes"
         return jsonify({
             'success': True,
-            'message': f'Processing {len(all_athletes)} athletes from {len(athletes_by_school)} schools...',
+            'message': f'Processing {mode_msg} from {len(athletes_by_school)} schools...',
             'athlete_count': len(all_athletes),
             'school_count': len(athletes_by_school),
-            'schools': list(athletes_by_school.keys())
+            'schools': list(athletes_by_school.keys()),
+            'full_roster': full_roster
         })
         
     except UnicodeDecodeError:

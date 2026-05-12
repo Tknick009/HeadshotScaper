@@ -1055,6 +1055,342 @@ def scrape_roster_for_athletes(url, target_names, output_dir, school_name):
     return matched, unmatched
 
 
+def scrape_full_roster(url, output_dir, school_name):
+    """Scrape ALL athletes from a roster page (no name filtering).
+    
+    Returns:
+        list: Names of all athletes whose images were downloaded.
+    """
+    from sidearm_pattern_extractor import SideArmExtractor
+    from urllib.parse import urlparse
+    
+    logging.info(f"Full roster scrape for {school_name}: {url}")
+    
+    domain = urlparse(url).netloc.lower()
+    
+    prestosports_domains = [
+        'goregispride.com', 'gosuffolkrams.com', 'wentworthathletics.com',
+        'westfieldstateowls.com', 'aicyellowjackets.com', 'laserpride.lasell.edu',
+        'ecgulls.com', 'leeuflames.com',
+        'cneagles.com', 'udcfirebirds.com', 'svsucardinals.com',
+        'tusculumpioneers.com', 'olivetcomets.com', 'onutigers.com',
+        'bakerwildcats.com', 'gonorthwood.com', 'pioneersathletics.com',
+        'psblions.com', 'sagegators.com', 'stacathletics.com',
+        'tampaspartans.com', 'ttusports.com', 'twbulldogs.com',
+    ]
+    
+    html_content = None
+    is_presto = any(pd in domain for pd in prestosports_domains)
+    if not is_presto and re.search(r'/\d{4}-\d{2}/', url):
+        is_presto = True
+        logging.info(f"Auto-detected PrestoSports URL pattern for {school_name}")
+    
+    if is_presto:
+        logging.info(f"PrestoSports domain detected - using Selenium")
+        try:
+            from fast_scraper import setup_headless_driver, fast_scroll_page
+            driver = setup_headless_driver()
+            if driver:
+                driver.get(url)
+                time.sleep(4)
+                fast_scroll_page(driver)
+                html_content = driver.page_source
+                driver.quit()
+        except Exception as e:
+            logging.error(f"Selenium failed for {url}: {e}")
+    
+    extractor = SideArmExtractor(url, output_dir, html_content=html_content)
+    all_athletes = extractor.extract_and_download_all()
+    
+    real_count = len([a for a in (all_athletes or []) if a.get('name') and (a.get('image') or a.get('image_url')) and 'dummy' not in (a.get('image') or a.get('image_url', '')).lower()])
+    if real_count < 5:
+        logging.info(f"Only {real_count} real athletes found, trying Selenium fallback...")
+        if not is_presto and not html_content:
+            try:
+                from fast_scraper import setup_headless_driver, fast_scroll_page
+                driver = setup_headless_driver()
+                if driver:
+                    driver.get(url)
+                    time.sleep(4)
+                    fast_scroll_page(driver)
+                    html_content = driver.page_source
+                    driver.quit()
+                    
+                    extractor2 = SideArmExtractor(url, output_dir, html_content=html_content)
+                    all_athletes = extractor2.extract_and_download_all()
+            except Exception as e:
+                logging.error(f"Selenium fallback failed: {e}")
+    
+    if not all_athletes:
+        # Try bio-page extraction for all roster links
+        logging.info(f"No athletes found via extractor, trying bio-page full extraction for {school_name}")
+        downloaded_names = _try_full_roster_bio_extraction(url, output_dir, school_name, html_content)
+        if downloaded_names:
+            return downloaded_names
+        logging.warning(f"No athletes found on roster page for {school_name}")
+        return []
+    
+    logging.info(f"Found {len(all_athletes)} athletes on roster for {school_name}, downloading all")
+    
+    downloaded = []
+    import concurrent.futures
+    
+    def download_one(athlete):
+        name = athlete.get('name', '')
+        if not name:
+            return None
+        result = extractor.download_athlete_image(athlete)
+        if result:
+            src_filename = re.sub(r'[^\w\-\.\s]', '', name)
+            src_filename = src_filename.replace('_', ' ')
+            src_filename = re.sub(r'\s+', ' ', src_filename).strip()
+            
+            src_path_png = os.path.join(output_dir, f"{src_filename}.png")
+            src_path_jpg = os.path.join(output_dir, f"{src_filename}.jpg")
+            
+            clean_school = re.sub(r'[^\w\s]', '', school_name).strip()
+            clean_school = re.sub(r'\s+', '_', clean_school)
+            
+            first_name, last_name = '', ''
+            parts = name.split()
+            if len(parts) >= 2:
+                first_name = parts[0]
+                last_name = ' '.join(parts[1:])
+            elif parts:
+                first_name = parts[0]
+            
+            clean_first = re.sub(r'[^\w]', '', first_name)
+            clean_last = re.sub(r'[^\w]', '', last_name)
+            
+            new_filename = f"{clean_school}_{clean_first}_{clean_last}.png"
+            new_path = os.path.join(output_dir, new_filename)
+            
+            for src_path in [src_path_png, src_path_jpg]:
+                if os.path.exists(src_path) and src_path != new_path:
+                    try:
+                        os.rename(src_path, new_path)
+                    except Exception as e:
+                        logging.warning(f"Rename failed: {e}")
+                    break
+            
+            return name
+        return None
+    
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+        futures = {executor.submit(download_one, a): a for a in all_athletes}
+        for future in concurrent.futures.as_completed(futures):
+            result = future.result()
+            if result:
+                downloaded.append(result)
+    
+    gc.collect()
+    logging.info(f"Full roster results for {school_name}: {len(downloaded)}/{len(all_athletes)} downloaded")
+    return downloaded
+
+
+def _try_full_roster_bio_extraction(url, output_dir, school_name, html_content=None):
+    """Extract headshots from individual bio pages for ALL athletes on the roster."""
+    from bs4 import BeautifulSoup
+    from urllib.parse import urlparse, urljoin, parse_qs, unquote
+    import requests
+    
+    parsed_url = urlparse(url)
+    base_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
+    
+    if not html_content:
+        try:
+            r = requests.get(url, timeout=15, headers={
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            })
+            html_content = r.text
+        except Exception as e:
+            logging.error(f"Failed to fetch roster page: {e}")
+            return []
+    
+    soup = BeautifulSoup(html_content, 'html.parser')
+    
+    roster_links = soup.find_all('a', href=lambda x: x and '/roster/' in x)
+    
+    athlete_links = {}
+    for a in roster_links:
+        href = a['href']
+        text = a.get_text(strip=True)
+        if not text or len(text.split()) < 2:
+            continue
+        if text.lower() in ['full bio', 'view bio', 'bio', 'profile', 'more']:
+            continue
+        if 'Full Bio' in text or 'View Bio' in text:
+            continue
+        if href not in athlete_links:
+            athlete_links[href] = text
+    
+    if not athlete_links:
+        logging.info("No athlete bio links found on roster page for full roster extraction")
+        return []
+    
+    logging.info(f"Found {len(athlete_links)} athlete bio links for full roster extraction")
+    
+    downloaded = []
+    seen_image_urls = set()
+    
+    session = requests.Session()
+    session.headers.update({
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+    })
+    
+    for bio_href, roster_name in athlete_links.items():
+        try:
+            bio_url = urljoin(base_url, bio_href)
+            logging.info(f"Fetching bio page for {roster_name}: {bio_url}")
+            bio_resp = session.get(bio_url, timeout=15)
+            if bio_resp.status_code != 200:
+                continue
+            
+            bio_soup = BeautifulSoup(bio_resp.text, 'html.parser')
+            
+            headshot_img = None
+            
+            headshot_containers = bio_soup.select(
+                '.sidearm-roster-player-image img, '
+                '.sidearm-roster-player-header-details img, '
+                '[class*="headshot"] img, '
+                '[class*="player-image"] img:not([class*="action"]), '
+                '[class*="person__image"] img'
+            )
+            for img in headshot_containers:
+                src = img.get('src') or img.get('data-src') or ''
+                if not src:
+                    continue
+                parent_classes = ''
+                for parent in img.parents:
+                    parent_classes += ' '.join(parent.get('class', [])).lower() + ' '
+                if 'action-photo' in parent_classes or 'cover' in parent_classes:
+                    continue
+                headshot_img = img
+                break
+            
+            if not headshot_img:
+                for img in bio_soup.find_all('img'):
+                    alt = (img.get('alt') or '').strip()
+                    src = img.get('src') or ''
+                    if not src:
+                        continue
+                    if alt and name_matches(alt, roster_name):
+                        parent_classes = ''
+                        for parent in img.parents:
+                            parent_classes += ' '.join(parent.get('class', [])).lower() + ' '
+                        if 'action-photo' in parent_classes or 'cover' in parent_classes:
+                            continue
+                        headshot_img = img
+                        break
+            
+            if not headshot_img:
+                imgs = bio_soup.find_all('img', src=lambda x: x and any(
+                    ext in x.lower() for ext in ['.jpg', '.jpeg', '.png', '.webp']
+                ))
+                exclude = ['logo', 'nav', 'footer', 'header', 'icon', 'button', 'background', 'sponsor', 'banner']
+                for img in imgs:
+                    src = (img.get('src') or '').lower()
+                    if any(kw in src for kw in exclude):
+                        continue
+                    cls_str = ' '.join(img.get('class', [])).lower()
+                    if any(kw in cls_str for kw in ['logo', 'nav-logo', 'site-logo']):
+                        continue
+                    parent_classes = ''
+                    for parent in img.parents:
+                        parent_classes += ' '.join(parent.get('class', [])).lower() + ' '
+                    if 'action-photo' in parent_classes or 'cover' in parent_classes:
+                        continue
+                    headshot_img = img
+                    break
+            
+            if not headshot_img:
+                continue
+            
+            img_url = headshot_img.get('src', '')
+            if not img_url:
+                continue
+            
+            if img_url.startswith('//'):
+                img_url = 'https:' + img_url
+            elif not img_url.startswith('http'):
+                img_url = urljoin(base_url, img_url)
+            
+            img_parsed = urlparse(img_url)
+            img_params = parse_qs(img_parsed.query)
+            if 'url' in img_params:
+                inner_url = unquote(img_params['url'][0])
+                if '?' in inner_url:
+                    img_url = f"{inner_url}&height=1000&quality=90"
+                else:
+                    img_url = f"{inner_url}?height=1000&quality=90"
+            elif '?' in img_url:
+                img_base = img_url.split('?')[0]
+                img_url = f"{img_base}?height=1000&quality=90"
+            else:
+                img_url = f"{img_url}?height=1000&quality=90"
+            
+            img_base_url = img_url.split('?')[0]
+            if img_base_url in seen_image_urls:
+                continue
+            seen_image_urls.add(img_base_url)
+            
+            img_resp = session.get(img_url, timeout=10)
+            if img_resp.status_code != 200:
+                continue
+            
+            from PIL import Image
+            from io import BytesIO
+            
+            img_data = img_resp.content
+            try:
+                pil_img = Image.open(BytesIO(img_data))
+            except Exception:
+                continue
+            
+            try:
+                from rembg import remove
+                import threading
+                lock = threading.Lock()
+                with lock:
+                    result = remove(img_data, post_process_mask=False, alpha_matting=False)
+                    pil_img = Image.open(BytesIO(result)).convert('RGBA')
+            except Exception:
+                pil_img = pil_img.convert('RGBA')
+            
+            max_height = 2000
+            if pil_img.height > max_height:
+                ratio = max_height / pil_img.height
+                new_width = int(pil_img.width * ratio)
+                pil_img = pil_img.resize((new_width, max_height), Image.LANCZOS)
+            
+            os.makedirs(output_dir, exist_ok=True)
+            
+            clean_school = re.sub(r'[^\w\s]', '', school_name).strip()
+            clean_school = re.sub(r'\s+', '_', clean_school)
+            parts = roster_name.split()
+            first_name = parts[0] if parts else ''
+            last_name = ' '.join(parts[1:]) if len(parts) >= 2 else ''
+            clean_first = re.sub(r'[^\w]', '', first_name)
+            clean_last = re.sub(r'[^\w]', '', last_name)
+            
+            filename = f"{clean_school}_{clean_first}_{clean_last}.png"
+            filepath = os.path.join(output_dir, filename)
+            
+            pil_img.save(filepath, 'PNG', optimize=True)
+            logging.info(f"Saved full-roster bio headshot: {filepath}")
+            downloaded.append(roster_name)
+            
+            gc.collect()
+            
+        except Exception as e:
+            logging.error(f"Error processing bio page for {roster_name}: {e}")
+            continue
+    
+    logging.info(f"Full roster bio extraction for {school_name}: {len(downloaded)} downloaded")
+    return downloaded
+
+
 targeted_progress = {
     'status': 'idle',
     'total_athletes': 0,
@@ -1067,7 +1403,8 @@ targeted_progress = {
     'completed': False,
     'zip_ready': False,
     'errors': [],
-    'sport': 'tf'
+    'sport': 'tf',
+    'full_roster': False
 }
 
 
@@ -1085,16 +1422,27 @@ def reset_targeted_progress():
         'completed': False,
         'zip_ready': False,
         'errors': [],
-        'sport': 'tf'
+        'sport': 'tf',
+        'full_roster': False
     }
 
 
-def run_targeted_scrape(csv_content, sport='tf', output_dir='athletes/targeted'):
+def run_targeted_scrape(csv_content, sport='tf', output_dir='athletes/targeted', full_roster=False):
+    """Run the targeted scrape pipeline.
+    
+    Args:
+        csv_content: CSV file content as string
+        sport: 'tf' for track & field, 'xc' for cross country
+        output_dir: Directory to save downloaded images
+        full_roster: If True, download ALL athletes from each school's roster
+                     instead of only matching CSV-listed athletes
+    """
     global targeted_progress
     
     reset_targeted_progress()
     targeted_progress['status'] = 'parsing'
     targeted_progress['sport'] = sport
+    targeted_progress['full_roster'] = full_roster
     
     os.makedirs(output_dir, exist_ok=True)
     
@@ -1117,7 +1465,8 @@ def run_targeted_scrape(csv_content, sport='tf', output_dir='athletes/targeted')
         targeted_progress['total_athletes'] = len(all_athletes)
         targeted_progress['total_schools'] = len(athletes_by_school)
         
-        logging.info(f"Parsed {len(all_athletes)} athletes from {len(athletes_by_school)} schools")
+        mode_str = "FULL ROSTER" if full_roster else "TARGETED"
+        logging.info(f"[{mode_str}] Parsed {len(all_athletes)} athletes from {len(athletes_by_school)} schools")
         
         db = load_roster_database()
         targeted_progress['status'] = 'discovering'
@@ -1127,7 +1476,7 @@ def run_targeted_scrape(csv_content, sport='tf', output_dir='athletes/targeted')
             targeted_progress['school_results'][school] = {
                 'status': 'discovering',
                 'matched': 0,
-                'total': len(athletes),
+                'total': len(athletes) if not full_roster else 0,
                 'unmatched': [],
                 'db_school': None
             }
@@ -1155,104 +1504,10 @@ def run_targeted_scrape(csv_content, sport='tf', output_dir='athletes/targeted')
         logging.info(f"URL discovery complete: {sum(1 for v in school_db_map.values() if v[0])}/{len(school_list)} schools have roster URLs")
         targeted_progress['status'] = 'scraping'
         
-        for school, athletes in athletes_by_school.items():
-            targeted_progress['current_school'] = school
-            targeted_progress['school_results'][school]['status'] = 'processing'
-            
-            urls, db_school = school_db_map[school]
-            
-            if not urls:
-                msg = f"No roster URL found for '{school}'"
-                logging.warning(msg)
-                targeted_progress['errors'].append(msg)
-                targeted_progress['unmatched_athletes'].extend(
-                    [{'school': school, 'name': a} for a in athletes]
-                )
-                targeted_progress['school_results'][school] = {
-                    'status': 'no_url',
-                    'matched': 0,
-                    'total': len(athletes),
-                    'unmatched': athletes
-                }
-                targeted_progress['processed_schools'] += 1
-                continue
-            
-            logging.info(f"Found roster URL(s) for {school} (matched: {db_school}): {urls}")
-            
-            all_matched = []
-            all_unmatched = []
-            school_label = (db_school or school).replace(' ', '_').replace("'", "").replace(".", "")
-            for athlete_name in athletes:
-                name_part = athlete_name.replace(' ', '_').replace("'", "").replace("-", "")
-                expected_file = f"{school_label}_{name_part}.png"
-                if any(f.replace("-","").replace("'","") == expected_file.replace("-","").replace("'","") for f in existing_files):
-                    all_matched.append(athlete_name)
-                    logging.info(f"SKIP (already downloaded): {school_label} {athlete_name}")
-                else:
-                    all_unmatched.append(athlete_name)
-            
-            if all_matched and not all_unmatched:
-                logging.info(f"All {len(all_matched)} athletes already downloaded for {school}")
-                targeted_progress['matched_athletes'] += len(all_matched)
-                targeted_progress['school_results'][school] = {
-                    'status': 'done',
-                    'db_school': db_school,
-                    'matched': len(all_matched),
-                    'total': len(athletes),
-                    'matched_names': all_matched,
-                    'unmatched': [],
-                    'reason': None
-                }
-                targeted_progress['processed_schools'] += 1
-                continue
-            
-            if all_matched:
-                logging.info(f"Skipping {len(all_matched)} already-downloaded athletes for {school}, scraping {len(all_unmatched)} remaining")
-            
-            scrape_errors = []
-            for roster_url in urls:
-                if not all_unmatched:
-                    break
-                    
-                try:
-                    matched, unmatched = scrape_roster_for_athletes(
-                        roster_url, all_unmatched, output_dir, db_school or school
-                    )
-                    all_matched.extend(matched)
-                    all_unmatched = unmatched
-                except Exception as e:
-                    logging.error(f"Error scraping {roster_url}: {e}")
-                    targeted_progress['errors'].append(f"Error scraping {school} ({roster_url}): {str(e)}")
-                    scrape_errors.append(str(e)[:80])
-            
-            targeted_progress['matched_athletes'] += len(all_matched)
-            targeted_progress['unmatched_athletes'].extend(
-                [{'school': school, 'name': a} for a in all_unmatched]
-            )
-            
-            reason = None
-            if all_unmatched:
-                reasons = []
-                if scrape_errors:
-                    reasons.append(f"Roster page error: {scrape_errors[0]}")
-                elif len(all_matched) == 0 and len(athletes) > 0:
-                    reasons.append("Could not extract any athlete data from roster page")
-                else:
-                    reasons.append(f"{len(all_unmatched)} athlete(s) not found on roster or image download failed")
-                reason = "; ".join(reasons)
-            
-            targeted_progress['school_results'][school] = {
-                'status': 'done',
-                'db_school': db_school,
-                'matched': len(all_matched),
-                'total': len(athletes),
-                'matched_names': all_matched,
-                'unmatched': all_unmatched,
-                'reason': reason
-            }
-            targeted_progress['processed_schools'] += 1
-            
-            gc.collect()
+        if full_roster:
+            _run_full_roster_scrape(athletes_by_school, school_db_map, output_dir, existing_files)
+        else:
+            _run_targeted_name_scrape(athletes_by_school, school_db_map, output_dir, existing_files)
         
         targeted_progress['status'] = 'complete'
         targeted_progress['completed'] = True
@@ -1260,10 +1515,183 @@ def run_targeted_scrape(csv_content, sport='tf', output_dir='athletes/targeted')
         
         total = targeted_progress['total_athletes']
         matched = targeted_progress['matched_athletes']
-        logging.info(f"Targeted scrape complete: {matched}/{total} athletes found across {len(athletes_by_school)} schools")
+        logging.info(f"Scrape complete: {matched}/{total} athletes found across {len(athletes_by_school)} schools")
         
     except Exception as e:
         logging.error(f"Targeted scrape error: {e}", exc_info=True)
         targeted_progress['status'] = 'error'
         targeted_progress['errors'].append(str(e))
         targeted_progress['completed'] = True
+
+
+def _run_full_roster_scrape(athletes_by_school, school_db_map, output_dir, existing_files):
+    """Full roster mode: download ALL athletes from each school's roster page."""
+    global targeted_progress
+    
+    for school, csv_athletes in athletes_by_school.items():
+        targeted_progress['current_school'] = school
+        targeted_progress['school_results'][school]['status'] = 'processing'
+        
+        urls, db_school = school_db_map[school]
+        
+        if not urls:
+            msg = f"No roster URL found for '{school}'"
+            logging.warning(msg)
+            targeted_progress['errors'].append(msg)
+            targeted_progress['school_results'][school] = {
+                'status': 'no_url',
+                'matched': 0,
+                'total': 0,
+                'unmatched': [],
+                'reason': 'No roster URL found'
+            }
+            targeted_progress['processed_schools'] += 1
+            continue
+        
+        logging.info(f"[FULL ROSTER] Scraping entire roster for {school} (matched: {db_school}): {urls}")
+        
+        school_label = (db_school or school).replace(' ', '_').replace("'", "").replace(".", "")
+        
+        all_downloaded = []
+        scrape_errors = []
+        
+        for roster_url in urls:
+            try:
+                downloaded = scrape_full_roster(
+                    roster_url, output_dir, db_school or school
+                )
+                all_downloaded.extend(downloaded)
+            except Exception as e:
+                logging.error(f"Error scraping full roster {roster_url}: {e}")
+                targeted_progress['errors'].append(f"Error scraping {school} ({roster_url}): {str(e)}")
+                scrape_errors.append(str(e)[:80])
+        
+        # Deduplicate (same athlete may appear on men's + combined pages)
+        all_downloaded = list(dict.fromkeys(all_downloaded))
+        
+        targeted_progress['matched_athletes'] += len(all_downloaded)
+        targeted_progress['total_athletes'] += len(all_downloaded)
+        
+        reason = None
+        if not all_downloaded:
+            if scrape_errors:
+                reason = f"Roster page error: {scrape_errors[0]}"
+            else:
+                reason = "Could not extract any athlete data from roster page"
+        
+        targeted_progress['school_results'][school] = {
+            'status': 'done',
+            'db_school': db_school,
+            'matched': len(all_downloaded),
+            'total': len(all_downloaded),
+            'matched_names': all_downloaded,
+            'unmatched': [],
+            'reason': reason
+        }
+        targeted_progress['processed_schools'] += 1
+        
+        gc.collect()
+
+
+def _run_targeted_name_scrape(athletes_by_school, school_db_map, output_dir, existing_files):
+    """Targeted mode: only download athletes matching names from the CSV."""
+    global targeted_progress
+    
+    for school, athletes in athletes_by_school.items():
+        targeted_progress['current_school'] = school
+        targeted_progress['school_results'][school]['status'] = 'processing'
+        
+        urls, db_school = school_db_map[school]
+        
+        if not urls:
+            msg = f"No roster URL found for '{school}'"
+            logging.warning(msg)
+            targeted_progress['errors'].append(msg)
+            targeted_progress['unmatched_athletes'].extend(
+                [{'school': school, 'name': a} for a in athletes]
+            )
+            targeted_progress['school_results'][school] = {
+                'status': 'no_url',
+                'matched': 0,
+                'total': len(athletes),
+                'unmatched': athletes
+            }
+            targeted_progress['processed_schools'] += 1
+            continue
+        
+        logging.info(f"Found roster URL(s) for {school} (matched: {db_school}): {urls}")
+        
+        all_matched = []
+        all_unmatched = []
+        school_label = (db_school or school).replace(' ', '_').replace("'", "").replace(".", "")
+        for athlete_name in athletes:
+            name_part = athlete_name.replace(' ', '_').replace("'", "").replace("-", "")
+            expected_file = f"{school_label}_{name_part}.png"
+            if any(f.replace("-","").replace("'","") == expected_file.replace("-","").replace("'","") for f in existing_files):
+                all_matched.append(athlete_name)
+                logging.info(f"SKIP (already downloaded): {school_label} {athlete_name}")
+            else:
+                all_unmatched.append(athlete_name)
+        
+        if all_matched and not all_unmatched:
+            logging.info(f"All {len(all_matched)} athletes already downloaded for {school}")
+            targeted_progress['matched_athletes'] += len(all_matched)
+            targeted_progress['school_results'][school] = {
+                'status': 'done',
+                'db_school': db_school,
+                'matched': len(all_matched),
+                'total': len(athletes),
+                'matched_names': all_matched,
+                'unmatched': [],
+                'reason': None
+            }
+            targeted_progress['processed_schools'] += 1
+            continue
+        
+        if all_matched:
+            logging.info(f"Skipping {len(all_matched)} already-downloaded athletes for {school}, scraping {len(all_unmatched)} remaining")
+        
+        scrape_errors = []
+        for roster_url in urls:
+            if not all_unmatched:
+                break
+                
+            try:
+                matched, unmatched = scrape_roster_for_athletes(
+                    roster_url, all_unmatched, output_dir, db_school or school
+                )
+                all_matched.extend(matched)
+                all_unmatched = unmatched
+            except Exception as e:
+                logging.error(f"Error scraping {roster_url}: {e}")
+                targeted_progress['errors'].append(f"Error scraping {school} ({roster_url}): {str(e)}")
+                scrape_errors.append(str(e)[:80])
+        
+        targeted_progress['matched_athletes'] += len(all_matched)
+        targeted_progress['unmatched_athletes'].extend(
+            [{'school': school, 'name': a} for a in all_unmatched]
+        )
+        
+        reason = None
+        if all_unmatched:
+            reasons = []
+            if scrape_errors:
+                reasons.append(f"Roster page error: {scrape_errors[0]}")
+            elif len(all_matched) == 0 and len(athletes) > 0:
+                reasons.append("Could not extract any athlete data from roster page")
+            else:
+                reasons.append(f"{len(all_unmatched)} athlete(s) not found on roster or image download failed")
+            reason = "; ".join(reasons)
+        
+        targeted_progress['school_results'][school] = {
+            'status': 'done',
+            'db_school': db_school,
+            'matched': len(all_matched),
+            'total': len(athletes),
+            'matched_names': all_matched,
+            'unmatched': all_unmatched,
+            'reason': reason
+        }
+        targeted_progress['processed_schools'] += 1
+        
+        gc.collect()

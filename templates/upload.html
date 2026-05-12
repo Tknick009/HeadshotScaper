@@ -358,6 +358,12 @@
                         <li><strong>Simple format</strong> &mdash; columns: <code>School, Athlete Name</code></li>
                         <li><strong>Header format</strong> &mdash; columns with headers like <code>School</code>, <code>Name</code>, <code>First</code>, <code>Last</code></li>
                     </ul>
+                    <h3 style="margin-top:0.75rem;">Full Roster Mode</h3>
+                    <ul>
+                        <li>Check <strong>Full Roster</strong> to download every athlete from each school's roster page</li>
+                        <li>The CSV identifies which schools to scrape &mdash; all roster athletes are downloaded regardless of whether they appear in the CSV</li>
+                        <li>Great for getting complete team headshot sets for video boards, broadcasts, and programs</li>
+                    </ul>
                 </div>
 
                 <form id="targeted-form" enctype="multipart/form-data">
@@ -376,6 +382,22 @@
                                 <option value="xc">Cross Country</option>
                             </select>
                         </div>
+                        <div class="form-group">
+                            <label>Mode</label>
+                            <div style="display:flex;align-items:center;gap:0.75rem;padding:0.6rem 0;">
+                                <label style="display:flex;align-items:center;gap:0.4rem;cursor:pointer;font-size:0.9rem;text-transform:none;letter-spacing:0;">
+                                    <input type="checkbox" id="targeted-full-roster" name="full_roster" value="true"
+                                        style="width:18px;height:18px;accent-color:#4fc3f7;">
+                                    <span style="color:#e0e0e0;">Full Roster</span>
+                                </label>
+                                <span style="color:#666;font-size:0.75rem;">(download entire roster for each school)</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="full-roster-info" style="display:none;background:#0d2818;border:1px solid #1b5e20;border-radius:6px;padding:0.75rem 1rem;margin-bottom:1rem;font-size:0.82rem;color:#a5d6a7;">
+                        <strong>Full Roster Mode:</strong> Instead of matching specific athletes from the CSV, this will download headshots for
+                        <em>every athlete</em> on each school's roster page. The CSV is used only to identify which schools to scrape.
                     </div>
 
                     <button type="submit" class="btn btn-primary" id="targeted-submit" disabled>
@@ -541,12 +563,21 @@
         setupDropZone('targeted-drop-zone', 'targeted-file', 'targeted-filename', 'targeted-submit');
         setupDropZone('bulk-drop-zone', 'bulk-file', 'bulk-filename', 'bulk-submit');
 
+        // Full Roster checkbox toggle info
+        document.getElementById('targeted-full-roster').addEventListener('change', (e) => {
+            document.getElementById('full-roster-info').style.display = e.target.checked ? 'block' : 'none';
+            document.getElementById('targeted-submit').textContent = e.target.checked
+                ? 'Start Full Roster Scrape'
+                : 'Start Targeted Scrape';
+        });
+
         // Targeted form submission
         document.getElementById('targeted-form').addEventListener('submit', async (e) => {
             e.preventDefault();
             const formData = new FormData();
             formData.append('file', document.getElementById('targeted-file').files[0]);
             formData.append('sport', document.getElementById('targeted-sport').value);
+            formData.append('full_roster', document.getElementById('targeted-full-roster').checked ? 'true' : 'false');
 
             try {
                 const resp = await fetch('/targeted-upload', { method: 'POST', body: formData });
@@ -556,7 +587,7 @@
                     document.getElementById('targeted-upload-card').style.display = 'none';
                     document.getElementById('targeted-progress-section').classList.add('active');
                     document.getElementById('stat-schools').textContent = data.school_count || 0;
-                    document.getElementById('stat-athletes').textContent = data.athlete_count || 0;
+                    document.getElementById('stat-athletes').textContent = data.full_roster ? '—' : (data.athlete_count || 0);
                     pollTargetedStatus();
                 } else {
                     alert(data.error || 'Upload failed');
@@ -611,21 +642,33 @@
             const totalSchools = data.total_schools || 1;
             const processed = data.processed_schools || 0;
             const pct = Math.round((processed / totalSchools) * 100);
+            const isFullRoster = data.full_roster || false;
 
             document.getElementById('targeted-progress-bar').style.width = pct + '%';
             document.getElementById('stat-matched').textContent = data.matched_athletes || 0;
             document.getElementById('stat-unmatched').textContent = (data.unmatched_athletes || []).length;
 
+            // Update athletes count dynamically in full roster mode
+            if (isFullRoster) {
+                document.getElementById('stat-athletes').textContent = data.matched_athletes || 0;
+            }
+
             // Status title
             if (data.completed) {
                 const matched = data.matched_athletes || 0;
                 const total = data.total_athletes || 0;
-                document.getElementById('targeted-progress-title').textContent =
-                    `Complete - ${matched}/${total} athletes found`;
+                if (isFullRoster) {
+                    document.getElementById('targeted-progress-title').textContent =
+                        `Complete - ${matched} athletes downloaded from ${processed} schools`;
+                } else {
+                    document.getElementById('targeted-progress-title').textContent =
+                        `Complete - ${matched}/${total} athletes found`;
+                }
                 document.getElementById('targeted-actions').style.display = 'flex';
             } else if (data.current_school) {
+                const modeLabel = isFullRoster ? 'Downloading full roster: ' : 'Currently processing: ';
                 document.getElementById('targeted-current-school').textContent =
-                    `Currently processing: ${data.current_school}`;
+                    modeLabel + data.current_school;
             }
 
             // School list
@@ -698,8 +741,10 @@
             document.getElementById('targeted-form').reset();
             document.getElementById('targeted-filename').textContent = '';
             document.getElementById('targeted-submit').disabled = true;
+            document.getElementById('targeted-submit').textContent = 'Start Targeted Scrape';
             document.getElementById('targeted-actions').style.display = 'none';
             document.getElementById('targeted-school-list').innerHTML = '';
+            document.getElementById('full-roster-info').style.display = 'none';
         }
 
         function resetBulk() {
