@@ -163,7 +163,7 @@ class SideArmExtractor:
         for match in bg_image_matches:
             url = match.group(1)
             # Only count .jpg, .png, etc. files that look like player images
-            if any(ext in url.lower() for ext in ['.jpg', '.jpeg', '.png', '.gif']) and not any(exclude in url.lower() for exclude in ['logo', 'banner', 'icon', 'background']):
+            if any(ext in url.lower() for ext in ['.jpg', '.jpeg', '.png', '.gif']) and not any(exclude in url.lower() for exclude in ['logo', 'banner', 'icon', 'background', 'action', 'cover', 'hero']):
                 # Check for name context around the image
                 context_before = html[max(0, match.start() - 200):match.start()]
                 context_after = html[match.end():min(len(html), match.end() + 200)]
@@ -213,6 +213,88 @@ class SideArmExtractor:
         
         return image_urls
         
+    def extract_from_json_ld(self, html):
+        """Extract athlete data from JSON-LD structured data (schema.org SportsTeam/ListItem/Person)."""
+        import json as json_module
+        athletes = []
+        
+        # Find all JSON-LD script blocks
+        soup = BeautifulSoup(html, 'html.parser')
+        ld_scripts = soup.find_all('script', type='application/ld+json')
+        
+        def extract_person(person_data):
+            """Extract name and image from a Person-type JSON-LD object."""
+            if not isinstance(person_data, dict):
+                return None
+            name = person_data.get('name', '')
+            if not name or not self.is_valid_athlete_name(name):
+                return None
+            
+            image_url = ''
+            img_data = person_data.get('image', {})
+            if isinstance(img_data, dict):
+                image_url = img_data.get('url', '')
+            elif isinstance(img_data, str):
+                image_url = img_data
+            
+            if name and image_url:
+                # Make absolute URL
+                if image_url.startswith('/'):
+                    image_url = self.base_url + image_url
+                return {
+                    'name': name,
+                    'image_url': image_url,
+                    'image': image_url,
+                }
+            return None
+        
+        for script in ld_scripts:
+            try:
+                if not script.string:
+                    continue
+                data = json_module.loads(script.string)
+                
+                # Handle both single objects and arrays
+                items = data if isinstance(data, list) else [data]
+                
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
+                    
+                    item_type = item.get('@type', '')
+                    
+                    # Format 1: SportsTeam with athlete/member list
+                    if item_type == 'SportsTeam':
+                        for key in ('athlete', 'member'):
+                            for person in item.get(key, []):
+                                result = extract_person(person)
+                                if result:
+                                    athletes.append(result)
+                    
+                    # Format 2: ListItem with item array of Person objects (SideArm/SFU format)
+                    elif item_type == 'ListItem' and 'item' in item:
+                        person_list = item['item']
+                        if isinstance(person_list, list):
+                            for person in person_list:
+                                result = extract_person(person)
+                                if result:
+                                    athletes.append(result)
+                        elif isinstance(person_list, dict):
+                            result = extract_person(person_list)
+                            if result:
+                                athletes.append(result)
+                    
+                    # Format 3: Direct Person object
+                    elif item_type == 'Person':
+                        result = extract_person(item)
+                        if result:
+                            athletes.append(result)
+                    
+            except (json_module.JSONDecodeError, TypeError, KeyError, ValueError):
+                continue
+        
+        return athletes
+    
     def extract_from_komodel_data(self, html):
         """Extract data from knockout.js data models commonly used by SideArm."""
         athletes = []
@@ -312,20 +394,60 @@ class SideArmExtractor:
 
         cards = roster_section.select('a[href*="/roster/"]')
         for card in cards:
-            all_imgs = card.select('img[alt]')
+            all_imgs = card.select('img')
             if not all_imgs:
                 continue
 
-            img = all_imgs[0]
-            image_url = img.get('src') or img.get('data-src', '')
-            if len(all_imgs) > 1:
+            # Smart image selection: prefer headshot over cover/action photo
+            img = None
+            image_url = ''
+            
+            # First pass: look for images in headshot-specific containers
+            for candidate in all_imgs:
+                csrc = candidate.get('src') or candidate.get('data-src', '') or ''
+                ccls = ' '.join(candidate.get('class', [])).lower()
+                # Check parent container classes for headshot indicators
+                parent_classes = ''
+                for p in candidate.parents:
+                    parent_classes += ' '.join(p.get('class', [])).lower() + ' '
+                
+                # Prefer headshot containers, skip action/cover containers
+                is_headshot = ('headshot' in ccls or 'headshot' in parent_classes or
+                              'player-image' in parent_classes or 'person__image' in parent_classes or
+                              'crop?' in csrc or 'width=80' in csrc or 'width=100' in csrc)
+                is_cover = ('action' in parent_classes or 'cover' in parent_classes or
+                           'action' in ccls or 'cover' in ccls)
+                
+                if is_headshot and not is_cover:
+                    img = candidate
+                    image_url = csrc
+                    break
+            
+            # Second pass: pick smallest image (likely thumbnail headshot, not cover)
+            if not img:
+                best_img = None
+                best_url = ''
                 for candidate in all_imgs:
                     csrc = candidate.get('src') or candidate.get('data-src', '') or ''
-                    ccls = ' '.join(candidate.get('class', [])).lower()
-                    if 'headshot' in ccls or 'crop?' in csrc:
-                        img = candidate
-                        image_url = csrc
-                        break
+                    # Skip images inside action/cover containers
+                    parent_classes = ''
+                    for p in candidate.parents:
+                        parent_classes += ' '.join(p.get('class', [])).lower() + ' '
+                    if 'action' in parent_classes or 'cover' in parent_classes:
+                        continue
+                    if not best_img:
+                        best_img = candidate
+                        best_url = csrc
+                img = best_img
+                image_url = best_url
+            
+            if not img or not image_url:
+                # Last resort: use first image
+                if all_imgs:
+                    img = all_imgs[0]
+                    image_url = img.get('src') or img.get('data-src', '')
+                else:
+                    continue
 
             name = img.get('alt', '').strip()
             if not image_url:
@@ -459,13 +581,16 @@ class SideArmExtractor:
                     # Use the AI model's output directly without modification for speed and quality
                     # Skipping quality checks for faster processing - u2net_human_seg is reliable
                     
-                    # Resize image to max 400px height while maintaining aspect ratio for efficiency
+                    # Keep images at high resolution for video board quality output
+                    # Only resize if image is extremely large (> 2000px height) to save space
                     width, height = output_img.size
-                    if height > 400:
-                        ratio = 400 / height
+                    if height > 2000:
+                        ratio = 2000 / height
                         new_width = int(width * ratio)
-                        output_img = output_img.resize((new_width, 400), Image.Resampling.LANCZOS)
-                        logging.info(f"Resized from {width}x{height} to {new_width}x400 for efficiency")
+                        output_img = output_img.resize((new_width, 2000), Image.Resampling.LANCZOS)
+                        logging.info(f"Resized from {width}x{height} to {new_width}x2000 (capped for storage)")
+                    elif height < 400:
+                        logging.info(f"Image is small ({width}x{height}) - keeping original resolution")
                     
                     # Save as PNG with transparency
                     file_path = os.path.join(self.output_dir, f"{safe_name}.png")
@@ -532,6 +657,11 @@ class SideArmExtractor:
         card_athletes = self.extract_from_person_cards(html)
         logging.info(f"Found {len(card_athletes)} athletes via person cards")
         all_athletes.extend(card_athletes)
+        
+        # Method 6: JSON-LD structured data (schema.org SportsTeam)
+        jsonld_athletes = self.extract_from_json_ld(html)
+        logging.info(f"Found {len(jsonld_athletes)} athletes via JSON-LD")
+        all_athletes.extend(jsonld_athletes)
         
         if not all_athletes:
             logging.error("Failed to find any athletes")
