@@ -47,25 +47,38 @@ class SideArmExtractor:
         
         name_lower = name.lower()
         
-        # Filter out common non-athlete terms
-        invalid_terms = ['full bio', 'bio', 'profile', 'roster', 'anchor', 'generic', 'missing', 'placeholder']
+        # Filter out common non-athlete terms and image/file artifacts
+        invalid_terms = [
+            'full bio', 'bio', 'profile', 'roster', 'anchor', 'generic',
+            'missing', 'placeholder', 'headshot', 'cropped', 'thumbnail',
+            'default', 'no image', 'no photo', 'coming soon', 'tba',
+        ]
         if any(term in name_lower for term in invalid_terms):
             return False
         
+        # Filter out sport code suffixes that get appended to names
+        # e.g., "Hannah Chappell-dick Xc", "John Smith Tf"
+        sport_suffixes = ['xc', 'tf', 'cc', 'track', 'field', 'indoor', 'outdoor']
+        words = name.split()
+        if len(words) >= 3 and words[-1].lower() in sport_suffixes:
+            return False
+        
         # Filter out names with random codes (e.g., "Blake pW7bv", "Sophie26", "0H2My")
-        # A valid name shouldn't have sequences of random letters/numbers mixed together
-        # Pattern: look for strings with mix of uppercase/lowercase/numbers in a way that suggests codes
         if re.search(r'[a-z][A-Z0-9]{2,}|[A-Z]{2,}[0-9]|[0-9][a-zA-Z]{2,}[0-9]', name):
             return False
         
         # Filter out names that are too short or don't have at least 2 words (first + last)
-        words = name.split()
         if len(words) < 2:
             return False
         
+        # Filter out names that are too long (likely concatenated garbage)
+        if len(words) > 5:
+            return False
+        
         # Each word should start with a capital letter (proper names)
+        # Allow special chars like O'Brien, hyphenated names, accented chars
         for word in words:
-            if word and not word[0].isupper():
+            if word and not word[0].isupper() and not word[0] in 'ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖØÙÚÛÜÝÞĀĂĄĆĈĊČĎĐĒĔĖĘĚĜĞĠĢĤĦĨĪĬĮİ':
                 return False
         
         return True
@@ -667,14 +680,9 @@ class SideArmExtractor:
             logging.error("Failed to find any athletes")
             return []
             
-        # Create a unique list of athletes (by name)
-        unique_athletes = {}
-        for athlete in all_athletes:
-            name = athlete.get('name')
-            if name and name not in unique_athletes:
-                unique_athletes[name] = athlete
-                
-        athletes_list = list(unique_athletes.values())
+        # Deduplicate athletes with fuzzy name matching
+        athletes_list = self._deduplicate_athletes(all_athletes)
+        logging.info(f"After deduplication: {len(athletes_list)} unique athletes (from {len(all_athletes)} raw)")
         
         # Apply selective filtering if provided
         if self.selective_filter:
@@ -683,6 +691,41 @@ class SideArmExtractor:
             return filtered_athletes
             
         return athletes_list
+    
+    def _normalize_for_dedup(self, name):
+        """Normalize a name for deduplication comparison."""
+        # Remove special characters, extra spaces, normalize case
+        n = re.sub(r'[^\w\s]', '', name.lower())
+        n = re.sub(r'\s+', ' ', n).strip()
+        return n
+    
+    def _deduplicate_athletes(self, all_athletes):
+        """Deduplicate athletes, preferring entries with better image URLs."""
+        unique = {}
+        
+        for athlete in all_athletes:
+            name = athlete.get('name', '')
+            if not name:
+                continue
+            
+            norm_name = self._normalize_for_dedup(name)
+            
+            if norm_name in unique:
+                # Prefer the entry with a better image URL (non-placeholder, higher quality)
+                existing = unique[norm_name]
+                existing_img = existing.get('image', existing.get('image_url', ''))
+                new_img = athlete.get('image', athlete.get('image_url', ''))
+                
+                # Prefer entries with image URLs, and prefer crop/resize URLs (higher quality)
+                if not existing_img and new_img:
+                    unique[norm_name] = athlete
+                elif new_img and ('crop' in new_img or 'width=' in new_img or 'height=' in new_img):
+                    if 'crop' not in existing_img and 'width=' not in existing_img:
+                        unique[norm_name] = athlete
+            else:
+                unique[norm_name] = athlete
+        
+        return list(unique.values())
     
     def apply_selective_filter(self, athletes_list):
         """Filter athletes based on the selective CSV criteria."""

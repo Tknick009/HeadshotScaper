@@ -213,6 +213,106 @@ def find_school_in_database(school_name, db):
     return None
 
 
+def _verify_url_accessible(url):
+    """Quick check if a URL is accessible (returns 200). Handles year-based redirects."""
+    import requests
+    try:
+        r = requests.head(url, timeout=5, allow_redirects=True, headers={
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        })
+        if r.status_code == 200:
+            return True, r.url
+        # Some servers don't support HEAD, try GET
+        if r.status_code in (405, 403):
+            r = requests.get(url, timeout=5, allow_redirects=True, headers={
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }, stream=True)
+            r.close()
+            if r.status_code == 200:
+                return True, r.url
+        return False, None
+    except Exception:
+        return False, None
+
+
+def _try_year_increment(url):
+    """Try incrementing year patterns in URLs (e.g., /2024-25/ -> /2025-26/)."""
+    import datetime
+    current_year = datetime.datetime.now().year
+    
+    # Pattern: /2023-24/ or /2024-25 (with or without trailing slash)
+    year_match = re.search(r'/(\d{4})-(\d{2})(/|$)', url)
+    if year_match:
+        start_year = int(year_match.group(1))
+        trailing = year_match.group(3)
+        candidates = []
+        for y in range(current_year, current_year - 3, -1):
+            end_suffix = str(y + 1)[-2:]
+            new_url = url[:year_match.start()] + f'/{y}-{end_suffix}{trailing}' + url[year_match.end():]
+            if new_url != url:
+                candidates.append(new_url)
+        return candidates
+    
+    # Pattern: /2024/ or /2024 (standalone year, with or without trailing slash)
+    year_match = re.search(r'/(\d{4})(/|$)', url)
+    if year_match:
+        year = int(year_match.group(1))
+        trailing = year_match.group(2)
+        # Only treat as year if it's a reasonable year (2010-2030)
+        if 2010 <= year <= 2030:
+            candidates = []
+            for y in range(current_year, current_year - 3, -1):
+                new_url = url[:year_match.start()] + f'/{y}{trailing}' + url[year_match.end():]
+                if new_url != url:
+                    candidates.append(new_url)
+            return candidates
+    
+    return []
+
+
+def _update_database_url(school_name, sport, key, new_url):
+    """Update a URL in the roster database file.
+    
+    If key is None, searches all keys in the sport for a URL with the same base domain
+    and updates the first match.
+    """
+    try:
+        with open(ROSTER_DB_PATH, 'r') as f:
+            db = json.load(f)
+        
+        # Find the school in the database (might be under a different name)
+        db_school = find_school_in_database(school_name, db) if school_name not in db else school_name
+        if not db_school or db_school not in db:
+            return
+        
+        school_data = db[db_school]
+        sport_data = school_data.get(sport, {})
+        if not sport_data:
+            return
+        
+        if key and key in sport_data:
+            old_url = sport_data[key]
+            sport_data[key] = new_url
+            with open(ROSTER_DB_PATH, 'w') as f:
+                json.dump(db, f, indent=2)
+            logging.info(f"Updated database: {db_school}/{sport}/{key}: {old_url} -> {new_url}")
+        elif key is None:
+            # Find the matching key by domain
+            from urllib.parse import urlparse
+            new_domain = urlparse(new_url).netloc.lower()
+            for k, v in sport_data.items():
+                if v and isinstance(v, str) and v.startswith('http'):
+                    old_domain = urlparse(v).netloc.lower()
+                    if old_domain == new_domain:
+                        sport_data[k] = new_url
+                        with open(ROSTER_DB_PATH, 'w') as f:
+                            json.dump(db, f, indent=2)
+                        logging.info(f"Updated database: {db_school}/{sport}/{k}: {v} -> {new_url}")
+                        return
+    except Exception as e:
+        logging.warning(f"Failed to update database: {e}")
+
+
 def get_roster_urls_for_school(school_name, db, sport='tf'):
     """Get roster URLs for a school. Tries database first, then dynamic discovery."""
     # Try the pre-built database first
@@ -612,20 +712,25 @@ def name_matches(roster_name, target_name):
                 return True
 
     # Full name fuzzy match as last resort
+    # Guard: if last names are clearly different (both >= 3 chars and no match), don't rely on full-name ratio
+    if r_last and t_last and len(r_last) >= 3 and len(t_last) >= 3:
+        if not last_names_match(r_last, t_last):
+            return False
+
     r_full = normalize_name_part(roster_name)
     t_full = normalize_name_part(target_name)
 
     if HAS_RAPIDFUZZ:
         score = rfuzz.ratio(r_full, t_full)
-        if score >= 80:
+        if score >= 88:
             return True
         # Token sort ratio handles word order differences
         token_score = rfuzz.token_sort_ratio(r_full, t_full)
-        if token_score >= 85:
+        if token_score >= 90:
             return True
     else:
         ratio = SequenceMatcher(None, r_full, t_full).ratio()
-        if ratio >= 0.80:
+        if ratio >= 0.88:
             return True
 
     return False
@@ -887,6 +992,25 @@ def scrape_roster_for_athletes(url, target_names, output_dir, school_name):
     
     logging.info(f"Scraping roster for {school_name}: {url}")
     logging.info(f"Looking for {len(target_names)} athletes: {target_names}")
+    
+    # Verify URL is accessible; if not, try year-incremented alternatives
+    accessible, final_url = _verify_url_accessible(url)
+    if not accessible:
+        logging.info(f"URL inaccessible for {school_name}: {url}, trying year variants...")
+        year_candidates = _try_year_increment(url)
+        for candidate in year_candidates:
+            ok, final = _verify_url_accessible(candidate)
+            if ok:
+                url = final or candidate
+                logging.info(f"Using updated URL for {school_name}: {url}")
+                # Update database in background
+                _update_database_url(school_name, 'tf', None, url)
+                break
+        else:
+            logging.warning(f"All URL variants failed for {school_name}, proceeding with original")
+    elif final_url and final_url != url:
+        logging.info(f"URL redirected for {school_name}: {url} -> {final_url}")
+        url = final_url
     
     domain = urlparse(url).netloc.lower()
     
