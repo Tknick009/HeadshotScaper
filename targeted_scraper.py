@@ -8,15 +8,38 @@ import gc
 from io import StringIO
 from typing import Dict, List, Optional, Tuple
 from difflib import SequenceMatcher
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+# Try to use rapidfuzz for better fuzzy matching performance
+try:
+    from rapidfuzz import fuzz as rfuzz
+    HAS_RAPIDFUZZ = True
+except ImportError:
+    HAS_RAPIDFUZZ = False
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-ROSTER_DB_PATH = 'roster_urls/roster_url_database.json'
+# Path for pre-built roster URL database
+ROSTER_DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'roster_url_database.json')
+
+# Minimum image height for video board quality output
+MIN_OUTPUT_HEIGHT = 800
 
 
 def load_roster_database():
-    with open(ROSTER_DB_PATH, 'r') as f:
-        return json.load(f)
+    """Load roster database if it exists, otherwise return empty dict."""
+    logging.info(f"Looking for roster database at: {ROSTER_DB_PATH}")
+    if os.path.exists(ROSTER_DB_PATH):
+        try:
+            with open(ROSTER_DB_PATH, 'r') as f:
+                db = json.load(f)
+            logging.info(f"Loaded roster database with {len(db)} schools")
+            return db
+        except Exception as e:
+            logging.warning(f"Could not load roster database: {e}")
+    else:
+        logging.warning(f"Roster database not found at {ROSTER_DB_PATH}")
+    return {}
 
 
 def normalize_school_name(name):
@@ -26,82 +49,136 @@ def normalize_school_name(name):
     return name
 
 
+# Comprehensive alias map for school name matching
+SCHOOL_ALIASES = {
+    'army': 'Army West Point',
+    'bu': 'Boston University',
+    'bc': 'Boston College',
+    'uconn': 'Connecticut',
+    'umass': 'UMass Amherst',
+    'uri': 'Rhode Island',
+    'rit': 'RIT',
+    'rpi': 'RPI',
+    'mit': 'MIT',
+    'nyu': 'NYU',
+    'usc': 'USC',
+    'ucla': 'UCLA',
+    'ucsd': 'UC San Diego',
+    'uci': 'UC Irvine',
+    'unc': 'North Carolina',
+    'ole miss': 'Ole Miss',
+    'lsu': 'LSU',
+    'smu': 'SMU',
+    'tcu': 'TCU',
+    'byu': 'BYU',
+    'unlv': 'UNLV',
+    'utep': 'UTEP',
+    'utsa': 'UTSA',
+    'vcu': 'VCU',
+    'wku': 'Western Kentucky',
+    'ecu': 'East Carolina',
+    'fiu': 'FIU',
+    'fau': 'FAU',
+    'uab': 'UAB',
+    'siue': 'SIU Edwardsville',
+    'siuc': 'Southern Illinois',
+    'wcsu': 'Western Connecticut State',
+    'western conn': 'Western Connecticut',
+    'scsu': 'Southern Connecticut',
+    'southern conn': 'Southern Connecticut',
+    'ecsu': 'Eastern Connecticut',
+    'ccsu': 'Central Connecticut',
+    'aic': 'American International',
+    'snhu': 'SNHU',
+    'umass lowell': 'UMass Lowell',
+    'umass dartmouth': 'UMass Dartmouth',
+    'umass amherst': 'UMass Amherst',
+    'umass boston': 'UMass Boston',
+    'saint rose': 'Saint Rose',
+    'st rose': 'Saint Rose',
+    'st. rose': 'Saint Rose',
+    'holy cross': 'Holy Cross',
+    'stonehill': 'Stonehill',
+    'merrimack': 'Merrimack',
+    'bentley': 'Bentley',
+    'assumption': 'Assumption',
+    'smith': 'Smith College',
+    'augusta': 'Augusta',
+    'ualbany': 'Albany',
+    'u of a': 'Arizona',
+    'osu': 'Ohio State',
+    'psu': 'Penn State',
+    'msu': 'Michigan State',
+    'isu': 'Iowa State',
+    'ksu': 'Kansas State',
+    'wsu': 'Washington State',
+    'tamu': 'Texas A&M',
+    'a&m': 'Texas A&M',
+    'ut': 'Texas',
+    'ou': 'Oklahoma',
+    'uf': 'Florida',
+    'uga': 'Georgia',
+    'uk': 'Kentucky',
+    'ua': 'Alabama',
+    'au': 'Auburn',
+    'uva': 'Virginia',
+    'vt': 'Virginia Tech',
+    'gt': 'Georgia Tech',
+    'nc state': 'NC State',
+    'ncsu': 'NC State',
+    # Hy-Tek parenthetical abbreviations
+    'loyola md': 'Loyola Maryland',
+    'loyola md.': 'Loyola Maryland',
+    'loyola (md.)': 'Loyola Maryland',
+    'loyola (md)': 'Loyola Maryland',
+    'miami fl': 'Miami',
+    'miami (fl)': 'Miami',
+    'miami (fl.)': 'Miami',
+    'miami fl.': 'Miami',
+    'miami oh': 'Miami (OH)',
+    'miami (oh)': 'Miami (OH)',
+    'st johns': "St. John's",
+    'st. johns': "St. John's",
+    'saint johns': "St. John's",
+    'st josephs': "Saint Joseph's",
+    'st. josephs': "Saint Joseph's",
+    'saint josephs': "Saint Joseph's",
+    'st francis pa': 'St. Francis (PA)',
+    'st. francis (pa)': 'St. Francis (PA)',
+    'mount st marys': "Mount St. Mary's",
+    'mt st marys': "Mount St. Mary's",
+    'mount st. marys': "Mount St. Mary's",
+    'mount st. mary\'s': "Mount St. Mary's",
+    'trinity conn': 'Trinity (Conn.)',
+    'trinity (conn.)': 'Trinity (Conn.)',
+    'app state': 'Appalachian State',
+    'appalachian st': 'Appalachian State',
+    'penn': 'Penn',
+    'u penn': 'Penn',
+    'upenn': 'Penn',
+}
+
+
 def find_school_in_database(school_name, db):
+    """Find school in database with fuzzy matching."""
+    if not db:
+        return None
+
     normalized = normalize_school_name(school_name)
 
+    # Exact match
     for db_school in db:
         if normalize_school_name(db_school) == normalized:
             return db_school
 
-    common_aliases = {
-        'army': 'Army West Point',
-        'bu': 'Boston University',
-        'bc': 'Boston College',
-        'uconn': 'Connecticut',
-        'umass': 'UMass Amherst',
-        'uri': 'Rhode Island',
-        'rit': 'RIT',
-        'rpi': 'RPI',
-        'mit': 'MIT',
-        'nyu': 'NYU',
-        'usc': 'USC',
-        'ucla': 'UCLA',
-        'ucsd': 'UC San Diego',
-        'uci': 'UC Irvine',
-        'unc': 'North Carolina',
-        'ole miss': 'Ole Miss',
-        'lsu': 'LSU',
-        'smu': 'SMU',
-        'tcu': 'TCU',
-        'byu': 'BYU',
-        'unlv': 'UNLV',
-        'utep': 'UTEP',
-        'utsa': 'UTSA',
-        'vcu': 'VCU',
-        'wku': 'Western Kentucky',
-        'ecu': 'East Carolina',
-        'fiu': 'FIU',
-        'fau': 'FAU',
-        'uab': 'UAB',
-        'siue': 'SIU Edwardsville',
-        'siuc': 'Southern Illinois',
-        'wcsu': 'Western Connecticut',
-        'western conn': 'Western Connecticut',
-        'wcsu': 'Western Connecticut State',
-        'scsu': 'Southern Connecticut',
-        'southern conn': 'Southern Connecticut',
-        'ecsu': 'Eastern Connecticut',
-        'ccsu': 'Central Connecticut',
-        'aic': 'American International',
-        'snhu': 'SNHU',
-        'umass lowell': 'UMass Lowell',
-        'umass dartmouth': 'UMass Dartmouth',
-        'umass amherst': 'UMass Amherst',
-        'umass boston': 'UMass Boston',
-        'saint rose': "Saint Rose",
-        'st rose': "Saint Rose",
-        "st. rose": "Saint Rose",
-        'holy cross': 'Holy Cross',
-        'stonehill': 'Stonehill',
-        'merrimack': 'Merrimack',
-        'bentley': 'Bentley',
-        'assumption': 'Assumption',
-        'smith': 'Smith College',
-        'augusta': 'Augusta',
-        'ualbany': 'Albany',
-    }
-    
-    if normalized in common_aliases:
-        alias_target = common_aliases[normalized]
+    # Alias match
+    if normalized in SCHOOL_ALIASES:
+        alias_target = SCHOOL_ALIASES[normalized]
         for db_school in db:
             if normalize_school_name(db_school) == normalize_school_name(alias_target):
                 return db_school
 
-    for db_school in db:
-        db_norm = normalize_school_name(db_school)
-        if normalized == db_norm:
-            return db_school
-    
+    # Substring match (if query is long enough)
     if len(normalized) >= 5:
         for db_school in db:
             db_norm = normalize_school_name(db_school)
@@ -110,44 +187,84 @@ def find_school_in_database(school_name, db):
             if shorter >= 5 and longer <= shorter * 2 and (normalized in db_norm or db_norm in normalized):
                 return db_school
 
+    # Fuzzy match
     best_match = None
-    best_ratio = 0
-    for db_school in db:
-        db_norm = normalize_school_name(db_school)
-        ratio = SequenceMatcher(None, normalized, db_norm).ratio()
-        if ratio > best_ratio:
-            best_ratio = ratio
-            best_match = db_school
-    
-    if best_ratio >= 0.85:
-        return best_match
-    
+    best_score = 0
+
+    if HAS_RAPIDFUZZ:
+        for db_school in db:
+            db_norm = normalize_school_name(db_school)
+            score = rfuzz.ratio(normalized, db_norm)
+            if score > best_score:
+                best_score = score
+                best_match = db_school
+        if best_score >= 85:
+            return best_match
+    else:
+        for db_school in db:
+            db_norm = normalize_school_name(db_school)
+            ratio = SequenceMatcher(None, normalized, db_norm).ratio()
+            if ratio > best_score:
+                best_score = ratio
+                best_match = db_school
+        if best_score >= 0.85:
+            return best_match
+
     return None
 
 
 def get_roster_urls_for_school(school_name, db, sport='tf'):
-    db_school = find_school_in_database(school_name, db)
-    if not db_school:
-        return None, db_school
-    
-    school_data = db[db_school]
-    urls = []
-    
-    sport_data = school_data.get(sport, {})
-    if not sport_data:
-        other_sport = 'xc' if sport == 'tf' else 'tf'
-        sport_data = school_data.get(other_sport, {})
-    
-    invalid_patterns = ['college closed', 'no roster', 'discontinued', 'n/a', 'none']
-    
-    for key in ['combined', 'men', 'women']:
-        url = sport_data.get(key, '')
-        if url and url.startswith('http'):
-            url_lower = url.lower()
-            if not any(inv in url_lower for inv in invalid_patterns):
+    """Get roster URLs for a school. Tries database first, then dynamic discovery."""
+    # Try the pre-built database first
+    if db:
+        db_school = find_school_in_database(school_name, db)
+        if db_school:
+            school_data = db[db_school]
+            urls = []
+
+            sport_data = school_data.get(sport, {})
+            if not sport_data:
+                other_sport = 'xc' if sport == 'tf' else 'tf'
+                sport_data = school_data.get(other_sport, {})
+
+            invalid_patterns = ['college closed', 'no roster', 'discontinued', 'n/a', 'none']
+
+            for key in ['combined', 'men', 'women']:
+                url = sport_data.get(key, '')
+                if url and url.startswith('http'):
+                    url_lower = url.lower()
+                    if not any(inv in url_lower for inv in invalid_patterns):
+                        urls.append(url)
+
+            if urls:
+                return urls, db_school
+
+    # Dynamic URL discovery using roster_url_builder
+    logging.info(f"No database entry for '{school_name}', trying dynamic URL discovery...")
+    try:
+        from roster_url_builder import find_roster_url
+
+        # Map sport codes to roster_url_builder sport codes
+        sport_map = {
+            'tf': ['mtf', 'wtf'],
+            'xc': ['mxc', 'wxc'],
+        }
+        sport_codes = sport_map.get(sport, ['mtf', 'wtf'])
+
+        urls = []
+        for code in sport_codes:
+            url = find_roster_url(school_name, code)
+            if url:
                 urls.append(url)
-    
-    return urls if urls else None, db_school
+                logging.info(f"Dynamic discovery found URL for {school_name} ({code}): {url}")
+
+        if urls:
+            return urls, school_name
+
+    except Exception as e:
+        logging.warning(f"Dynamic URL discovery failed for '{school_name}': {e}")
+
+    return None, None
 
 
 def _detect_hytek_format(rows):
@@ -326,6 +443,18 @@ NICKNAME_MAP = {
     'andy': 'andrew', 'andrew': 'andy',
     'drew': 'andrew',
     'charlie': 'charles', 'charles': 'charlie',
+    'charlotte': 'charlie',
+    'steph': 'stephanie', 'stephanie': 'steph',
+    'micky': 'mccartney',
+    'maddy': 'madeline',
+    'brianna': 'bri', 'bri': 'brianna',
+    'frankie': 'francesca', 'francesca': 'frankie',
+    'viv': 'vivian', 'vivian': 'viv',
+    'ellie': 'elizabeth',
+    'les': 'lesli', 'lesli': 'les',
+    'mckenzie': 'kenzie', 'kenzie': 'mckenzie',
+    'ayo': 'ayomide',
+    'gabe': 'gabriel', 'gabriel': 'gabe',
     'chuck': 'charles',
     'jack': 'john', 'john': 'jack',
     'johnny': 'john',
@@ -392,68 +521,113 @@ def split_name_parts(name):
 
 
 def first_names_match(name1, name2):
+    """Check if two first names match, accounting for nicknames and initials."""
     if name1 == name2:
         return True
-    
-    if name1[:3] == name2[:3] and len(name1) >= 3 and len(name2) >= 3:
+
+    # Prefix match (3+ chars) - catches "Dan" matching "Daniel", etc.
+    if len(name1) >= 3 and len(name2) >= 3 and name1[:3] == name2[:3]:
         return True
-    
+
+    # Nickname lookup
     canonical1 = NICKNAME_MAP.get(name1, name1)
     canonical2 = NICKNAME_MAP.get(name2, name2)
     if canonical1 == canonical2:
         return True
     if canonical1 == name2 or canonical2 == name1:
         return True
-    
+
+    # Initial match (e.g., "J" matches "James")
     if len(name1) == 1 and name2.startswith(name1):
         return True
     if len(name2) == 1 and name1.startswith(name2):
         return True
-    
+
+    # Rapidfuzz partial match for longer names
+    if HAS_RAPIDFUZZ and len(name1) >= 4 and len(name2) >= 4:
+        if rfuzz.ratio(name1, name2) >= 80:
+            return True
+
     return False
 
 
 def last_names_match(name1, name2):
+    """Check if two last names match, handling hyphens, apostrophes, and typos."""
     if name1 == name2:
         return True
-    
+
+    # Normalize special characters
     n1 = name1.replace('-', '').replace("'", '').replace(' ', '')
     n2 = name2.replace('-', '').replace("'", '').replace(' ', '')
     if n1 == n2:
         return True
-    
-    ratio = SequenceMatcher(None, name1, name2).ratio()
-    if ratio >= 0.85:
-        return True
-    
+
+    # One name is a prefix of the other (e.g., hyphenated vs single)
+    if len(n1) >= 3 and len(n2) >= 3:
+        if n1.startswith(n2) or n2.startswith(n1):
+            return True
+
+    # Fuzzy match
+    if HAS_RAPIDFUZZ:
+        if rfuzz.ratio(name1, name2) >= 85:
+            return True
+    else:
+        ratio = SequenceMatcher(None, name1, name2).ratio()
+        if ratio >= 0.85:
+            return True
+
     return False
 
 
 def name_matches(roster_name, target_name):
+    """Check if a roster name matches a target name with comprehensive fuzzy matching."""
     r_first, r_last, r_mid = split_name_parts(roster_name)
     t_first, t_last, t_mid = split_name_parts(target_name)
-    
+
     if not r_first or not t_first:
         return False
-    
+
+    # Direct match
     if r_first == t_first and r_last == t_last:
         return True
-    
+
+    # Fuzzy component match
     if first_names_match(r_first, t_first) and last_names_match(r_last, t_last):
         return True
-    
+
+    # Swapped first/last (some systems list "Last First")
     if first_names_match(r_first, t_last) and last_names_match(r_last, t_first):
         return True
-    
-    if last_names_match(r_last, t_last) and first_names_match(r_first, t_first):
-        return True
-    
+
+    # Try matching with middle names included
+    if r_mid and last_names_match(r_last, t_last):
+        # Check if first or middle name matches target first
+        for mid in r_mid:
+            if first_names_match(mid, t_first):
+                return True
+
+    if t_mid and last_names_match(r_last, t_last):
+        for mid in t_mid:
+            if first_names_match(r_first, mid):
+                return True
+
+    # Full name fuzzy match as last resort
     r_full = normalize_name_part(roster_name)
     t_full = normalize_name_part(target_name)
-    ratio = SequenceMatcher(None, r_full, t_full).ratio()
-    if ratio >= 0.80:
-        return True
-    
+
+    if HAS_RAPIDFUZZ:
+        score = rfuzz.ratio(r_full, t_full)
+        if score >= 80:
+            return True
+        # Token sort ratio handles word order differences
+        token_score = rfuzz.token_sort_ratio(r_full, t_full)
+        if token_score >= 85:
+            return True
+    else:
+        ratio = SequenceMatcher(None, r_full, t_full).ratio()
+        if ratio >= 0.80:
+            return True
+
     return False
 
 
@@ -518,6 +692,7 @@ def try_bio_page_extraction(url, target_names, output_dir, school_name, html_con
     logging.info(f"Matched {len(matched_bio_links)} athletes, visiting bio pages for headshots")
     
     matched = []
+    seen_image_urls = set()  # Track unique image URLs to detect default/placeholder images
     
     session = requests.Session()
     session.headers.update({
@@ -535,15 +710,47 @@ def try_bio_page_extraction(url, target_names, output_dir, school_name, html_con
             bio_soup = BeautifulSoup(bio_resp.text, 'html.parser')
             
             headshot_img = None
-            for img in bio_soup.find_all('img'):
-                alt = (img.get('alt') or '').strip()
-                src = img.get('src') or ''
+            
+            # Priority 1: Look for image inside headshot-specific container
+            headshot_containers = bio_soup.select(
+                '.sidearm-roster-player-image img, '
+                '.sidearm-roster-player-header-details img, '
+                '[class*="headshot"] img, '
+                '[class*="player-image"] img:not([class*="action"]), '
+                '[class*="person__image"] img'
+            )
+            for img in headshot_containers:
+                src = img.get('src') or img.get('data-src') or ''
                 if not src:
                     continue
-                if alt and name_matches(alt, roster_name):
-                    headshot_img = img
-                    break
+                # Make sure this is NOT inside an action/cover photo container
+                parent_classes = ''
+                for parent in img.parents:
+                    parent_classes += ' '.join(parent.get('class', [])).lower() + ' '
+                if 'action-photo' in parent_classes or 'cover' in parent_classes:
+                    continue
+                headshot_img = img
+                logging.info(f"Found headshot in dedicated container for {roster_name}")
+                break
             
+            # Priority 2: Match by alt text containing athlete name
+            if not headshot_img:
+                for img in bio_soup.find_all('img'):
+                    alt = (img.get('alt') or '').strip()
+                    src = img.get('src') or ''
+                    if not src:
+                        continue
+                    if alt and name_matches(alt, roster_name):
+                        # Still skip if inside action-photo container
+                        parent_classes = ''
+                        for parent in img.parents:
+                            parent_classes += ' '.join(parent.get('class', [])).lower() + ' '
+                        if 'action-photo' in parent_classes or 'cover' in parent_classes:
+                            continue
+                        headshot_img = img
+                        break
+            
+            # Priority 3: Fallback - find first content image, but skip action/cover photos
             if not headshot_img:
                 imgs = bio_soup.find_all('img', src=lambda x: x and any(
                     ext in x.lower() for ext in ['.jpg', '.jpeg', '.png', '.webp']
@@ -555,6 +762,13 @@ def try_bio_page_extraction(url, target_names, output_dir, school_name, html_con
                         continue
                     cls_str = ' '.join(img.get('class', [])).lower()
                     if any(kw in cls_str for kw in ['logo', 'nav-logo', 'site-logo']):
+                        continue
+                    # Skip images inside action/cover photo containers
+                    parent_classes = ''
+                    for parent in img.parents:
+                        parent_classes += ' '.join(parent.get('class', [])).lower() + ' '
+                    if 'action-photo' in parent_classes or 'cover' in parent_classes:
+                        logging.info(f"Skipping action/cover photo for {roster_name}")
                         continue
                     headshot_img = img
                     break
@@ -586,6 +800,13 @@ def try_bio_page_extraction(url, target_names, output_dir, school_name, html_con
             else:
                 img_url = f"{img_url}?height=1000&quality=90"
             
+            # Check for duplicate/default images (same URL used for multiple athletes)
+            img_base_url = img_url.split('?')[0]  # Compare without query params
+            if img_base_url in seen_image_urls:
+                logging.warning(f"Skipping duplicate/default image for {roster_name}: {img_base_url[:80]}")
+                continue
+            seen_image_urls.add(img_base_url)
+            
             logging.info(f"Downloading headshot for {roster_name}: {img_url[:120]}")
             img_resp = session.get(img_url, timeout=10)
             if img_resp.status_code != 200:
@@ -614,11 +835,13 @@ def try_bio_page_extraction(url, target_names, output_dir, school_name, html_con
                 logging.warning(f"Background removal failed for {roster_name}: {e}")
                 pil_img = pil_img.convert('RGBA')
             
-            max_height = 400
+            # Keep images at high resolution for video board quality
+            # Only resize if extremely large (> 2000px) to avoid memory issues
+            max_height = 2000
             if pil_img.height > max_height:
                 ratio = max_height / pil_img.height
                 new_width = int(pil_img.width * ratio)
-                logging.info(f"Resized from {pil_img.width}x{pil_img.height} to {new_width}x{max_height} for efficiency")
+                logging.info(f"Resized from {pil_img.width}x{pil_img.height} to {new_width}x{max_height} (capping extremely large image)")
                 pil_img = pil_img.resize((new_width, max_height), Image.LANCZOS)
             
             os.makedirs(output_dir, exist_ok=True)
@@ -670,11 +893,20 @@ def scrape_roster_for_athletes(url, target_names, output_dir, school_name):
     prestosports_domains = [
         'goregispride.com', 'gosuffolkrams.com', 'wentworthathletics.com',
         'westfieldstateowls.com', 'aicyellowjackets.com', 'laserpride.lasell.edu',
-        'ecgulls.com', 'leeuflames.com'
+        'ecgulls.com', 'leeuflames.com',
+        'cneagles.com', 'udcfirebirds.com', 'svsucardinals.com',
+        'tusculumpioneers.com', 'olivetcomets.com', 'onutigers.com',
+        'bakerwildcats.com', 'gonorthwood.com', 'pioneersathletics.com',
+        'psblions.com', 'sagegators.com', 'stacathletics.com',
+        'tampaspartans.com', 'ttusports.com', 'twbulldogs.com',
     ]
     
     html_content = None
+    # Detect PrestoSports by domain list OR by URL pattern (year in path like /2025-26/)
     is_presto = any(pd in domain for pd in prestosports_domains)
+    if not is_presto and re.search(r'/\d{4}-\d{2}/', url):
+        is_presto = True
+        logging.info(f"Auto-detected PrestoSports URL pattern for {school_name}")
     
     if is_presto:
         logging.info(f"PrestoSports domain detected - using Selenium")
@@ -693,7 +925,7 @@ def scrape_roster_for_athletes(url, target_names, output_dir, school_name):
     extractor = SideArmExtractor(url, output_dir, html_content=html_content)
     all_athletes = extractor.extract_and_download_all()
     
-    real_count = len([a for a in (all_athletes or []) if a.get('name') and a.get('image_url') and 'dummy' not in a.get('image_url', '').lower()])
+    real_count = len([a for a in (all_athletes or []) if a.get('name') and (a.get('image') or a.get('image_url')) and 'dummy' not in (a.get('image') or a.get('image_url', '')).lower()])
     if real_count < 5:
         logging.info(f"Only {real_count} real athletes found, trying Selenium fallback...")
         if not is_presto and not html_content:
@@ -736,6 +968,15 @@ def scrape_roster_for_athletes(url, target_names, output_dir, school_name):
                 break
     
     logging.info(f"Filtered to {len(athletes)} matching athletes")
+    
+    # If no athletes matched via roster extraction, fall back to bio-page extraction
+    if len(athletes) == 0:
+        logging.info(f"No athletes matched from roster extraction, trying bio-page extraction for {school_name}")
+        matched, unmatched = try_bio_page_extraction(url, target_names, output_dir, school_name, html_content)
+        if matched:
+            return matched, unmatched
+        logging.warning(f"Bio-page extraction also found no matches for {school_name}")
+        return [], list(target_names)
     
     matched = []
     downloaded = 0
@@ -801,6 +1042,13 @@ def scrape_roster_for_athletes(url, target_names, output_dir, school_name):
                 break
         if not found:
             unmatched.append(target)
+    
+    # If downloads failed for all matched athletes, try bio-page extraction
+    if downloaded == 0 and len(athletes) > 0:
+        logging.info(f"All {len(athletes)} image downloads failed, trying bio-page extraction for {school_name}")
+        bio_matched, bio_unmatched = try_bio_page_extraction(url, target_names, output_dir, school_name, html_content)
+        if bio_matched:
+            return bio_matched, bio_unmatched
     
     logging.info(f"Results for {school_name}: {downloaded} downloaded, {len(unmatched)} not found")
     
@@ -872,19 +1120,40 @@ def run_targeted_scrape(csv_content, sport='tf', output_dir='athletes/targeted')
         logging.info(f"Parsed {len(all_athletes)} athletes from {len(athletes_by_school)} schools")
         
         db = load_roster_database()
-        targeted_progress['status'] = 'scraping'
+        targeted_progress['status'] = 'discovering'
         
-        school_db_map = {}
+        # Initialize all school results as pending
         for school, athletes in athletes_by_school.items():
-            urls, db_school = get_roster_urls_for_school(school, db, sport)
-            school_db_map[school] = (urls, db_school)
             targeted_progress['school_results'][school] = {
-                'status': 'pending',
+                'status': 'discovering',
                 'matched': 0,
                 'total': len(athletes),
                 'unmatched': [],
-                'db_school': db_school if db_school and db_school != school else None
+                'db_school': None
             }
+        
+        # Parallel URL discovery - much faster than sequential
+        school_db_map = {}
+        school_list = list(athletes_by_school.keys())
+        logging.info(f"Starting parallel URL discovery for {len(school_list)} schools...")
+        
+        def _discover_urls(school_name):
+            return school_name, get_roster_urls_for_school(school_name, db, sport)
+        
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            futures = {executor.submit(_discover_urls, school): school for school in school_list}
+            discovered = 0
+            for future in as_completed(futures):
+                school_name, (urls, db_school) = future.result()
+                school_db_map[school_name] = (urls, db_school)
+                discovered += 1
+                targeted_progress['school_results'][school_name]['db_school'] = db_school if db_school and db_school != school_name else None
+                targeted_progress['school_results'][school_name]['status'] = 'pending' if urls else 'no_url'
+                if discovered % 10 == 0:
+                    logging.info(f"URL discovery progress: {discovered}/{len(school_list)} schools")
+        
+        logging.info(f"URL discovery complete: {sum(1 for v in school_db_map.values() if v[0])}/{len(school_list)} schools have roster URLs")
+        targeted_progress['status'] = 'scraping'
         
         for school, athletes in athletes_by_school.items():
             targeted_progress['current_school'] = school

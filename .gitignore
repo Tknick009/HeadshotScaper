@@ -7,3 +7,8 @@ __pycache__/
 *.zip
 progress_*.json
 chromedriver*
+url_cache.json
+*.egg-info/
+dist/
+build/
+.scraping_progress.json
